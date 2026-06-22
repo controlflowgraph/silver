@@ -148,6 +148,10 @@ sealed trait PKeywordIf extends PKeywordStmt
 
 abstract class PKw(val keyword: String) extends PKeyword
 object PKw {
+  case object Datatype extends PKw("datatype") with PKeywordLang
+  type Datatype = PReserved[Datatype.type]
+  case object MakeExp extends PKw("make") with PKeywordLang
+  type MakeExp = PReserved[MakeExp.type]
   case object Import extends PKw("import") with PKeywordLang
   type Import = PReserved[Import.type]
   case object Define extends PKw("define") with PKeywordLang

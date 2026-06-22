@@ -404,7 +404,7 @@ class FastParser {
   def atomReservedKw[$: P]: P[PExp] = {
     reservedKwMany(
       StringIn("true", "false", "null", "old", "result", "acc", "none", "wildcard", "write", "epsilon", "perm", "let", "forall", "exists", "forperm",
-        "unfolding", "applying", "asserting", "Set", "Seq", "Multiset", "Map", "range", "domain", "new"),
+        "unfolding", "applying", "asserting", "Set", "Seq", "Multiset", "Map", "range", "domain", "new", "make"),
       str => pos => str match {
         case "true" => Pass.map(_ => PBoolLit(PReserved(PKw.True)(pos))(_))
         case "false" => Pass.map(_ => PBoolLit(PReserved(PKw.False)(pos))(_))
@@ -431,6 +431,7 @@ class FastParser {
         case "range" => mapRange.map(_(PReserved(PKwOp.Range)(pos)))
         case "domain" => mapDomain.map(_(PReserved(PKwOp.Domain)(pos)))
         case "new" => newExp.map(_(PReserved(PKw.New)(pos)))
+        case "make" => makeExp.map(_(PReserved(PKw.MakeExp)(pos)))
       }
     ).pos
   }
@@ -878,18 +879,53 @@ class FastParser {
 
   def memberReservedKw[$: P]: P[PAnnotationsPosition => PMember] = {
     reservedKwMany(
-      StringIn("import", "define", "field", "method", "domain", "function", "predicate"),
+      StringIn("import", "define", "field", "method", "domain", "datatype", "function", "predicate"),
       str => pos => str match {
         case "import" => preambleImport.map(_(PReserved(PKw.Import)(pos)))
         case "define" => defineDecl.map(_(PReserved(PKw.Define)(pos)))
         case "field" => fieldDecl.map(_(PReserved(PKw.Field)(pos)))
         case "method" => methodDecl.map(_(PReserved(PKw.Method)(pos)))
         case "domain" => domainDecl.map(_(PReserved(PKw.Domain)(pos)))
+        case "datatype" => datatypeDecl.map(_(PReserved(PKw.Datatype)(pos)))
         case "function" => functionDecl.map(_(PReserved(PKw.Function)(pos)))
         case "predicate" => predicateDecl.map(_(PReserved(PKw.Predicate)(pos)))
       }
     )
   }
+
+  def datatypeFieldDecl[$: P]: P[PKw.Field => PAnnotationsPosition => PDatatypeFields] = P((nonEmptyIdnTypeList(fff => PDatatypeFieldDecl(fff.idndef, fff.c, fff.typ)(fff.pos)) ~~~ P(PSym.Semi).lw.?) map {
+    case (a, s) => k => ap: PAnnotationsPosition => PDatatypeFields(ap.annotations, k, a, s)(ap.pos)
+  })
+
+
+  def datatypeMemberKw[$: P]: P[PAnnotationsPosition => PDatatypeFields] = {
+    reservedKwMany(
+      StringIn("field"),
+      str => pos => str match {
+        case "field" => datatypeFieldDecl.map(_(PReserved(PKw.Field)(pos)))
+      }
+    )
+  }
+
+
+  def datatypeDecl[$: P]: P[PKw.Datatype => PAnnotationsPosition => PDatatype] = P(idndef ~~~ typeList(domainTypeVarDecl).lw.? ~ annotated(datatypeMemberKw).rep.braces).map {
+    case (name, typparams, fields)=>
+      k => ap: PAnnotationsPosition => PDatatype(
+        ap.annotations,
+        k,
+        name,
+        typparams,
+        fields /*.map(v => {
+          val updatedInner = (v.inner._1, v.inner._2.map(c => c.withName(name.name)))
+          PGrouped[PSym.Brace, (Seq[PDatatypeFields], Seq[PConstructor])](v.l, updatedInner, v.r)(v.pos)
+        })*/)(ap.pos)
+  }
+
+  def makeExp[$: P]: P[PKw.MakeExp => Pos => PMakeExp] = P(typ.lw ~~ argList(exp)).map {
+    v =>
+      (k => PMakeExp(k, v._1, v._2)(_))
+  }
+
 
   def programMember(implicit ctx : P[_]): P[PMember] =
     annotated(ParserExtension.newDeclAtStart(ctx) | memberReservedKw | ParserExtension.newDeclAtEnd(ctx))

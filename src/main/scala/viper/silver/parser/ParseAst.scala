@@ -405,7 +405,7 @@ case class PDomainType(domain: PIdnRef[PTypeDeclaration], args: Option[PDelimite
   def isTypeVar = kind == PDomainTypeKinds.TypeVar
 
   override def isValidOrUndeclared =
-    (isTypeVar || kind == PDomainTypeKinds.Domain || kind == PDomainTypeKinds.Undeclared) &&
+    (isTypeVar || kind == PDomainTypeKinds.Datatype || kind == PDomainTypeKinds.Domain || kind == PDomainTypeKinds.Undeclared) &&
       typeArgs.forall(_.isValidOrUndeclared)
 
   def isResolved = kind != PDomainTypeKinds.Unresolved
@@ -417,7 +417,7 @@ case class PDomainType(domain: PIdnRef[PTypeDeclaration], args: Option[PDelimite
   }
 
   override def substitute(ts: PTypeSubstitution): PType = {
-    require(kind == PDomainTypeKinds.Domain || kind == PDomainTypeKinds.TypeVar || kind == PDomainTypeKinds.Undeclared)
+    require(kind == PDomainTypeKinds.Domain || kind == PDomainTypeKinds.Datatype || kind == PDomainTypeKinds.TypeVar || kind == PDomainTypeKinds.Undeclared)
     if (isTypeVar)
       if (ts.isDefinedAt(domain.name))
         return ts.get(domain.name).get
@@ -443,6 +443,7 @@ object PDomainTypeKinds {
   trait Kind
   case object Unresolved extends Kind
   case object Domain extends Kind
+  case object Datatype extends Kind
   case object TypeVar extends Kind
   case object Undeclared extends Kind
 }
@@ -1679,6 +1680,96 @@ case class PDomain(annotations: Seq[PAnnotation], domain: PKw.Domain, idndef: PI
 
   def funcs: Seq[PDomainFunction] = members.inner.toSeq.collect { case f: PDomainFunction => f }
   def axioms: Seq[PAxiom] = members.inner.toSeq.collect { case a: PAxiom => a }
+}
+
+case class PDatatypeFieldDecl(var idndef: PIdnDef, c: PSym.Colon, typ: PType)(val pos: (Position, Position)) extends PTypedDeclaration with PLocalDeclaration {
+  var decl: Option[PDatatypeFields] = None
+  //  override def annotations = decl.toSeq.flatMap(_.annotations)
+}
+
+case class PDatatypeFields(annotations: Seq[PAnnotation], field: PKw.Field, fields: PDelimited[PDatatypeFieldDecl, PSym.Comma], s: Option[PSym.Semi])(val pos: (Position, Position)) extends PMember {
+  override def declares: Seq[PGlobalDeclaration] = Seq.empty
+}
+
+
+case class PDatatype(annotations: Seq[PAnnotation], datatype: PKw.Datatype, idndef: PIdnDef, typVars: Option[PDelimited.Comma[PSym.Bracket, PTypeVarDecl]], content: PGrouped[PSym.Brace, Seq[PDatatypeFields]])
+                    (val pos: (Position, Position)) extends PSingleMember with PTypeDeclaration {
+  def typVarsSeq: Seq[PTypeVarDecl] = typVars.map(_.inner.toSeq).getOrElse(Nil)
+
+
+  def containedFields: Seq[PDatatypeFields] = content.inner
+
+  def containedFieldDecls: Seq[PDatatypeFieldDecl] = this.containedFields
+    .flatMap(f => f.fields.first)
+
+  def typeVarDecls: Seq[PTypeVarDecl] = this.typVars.map(v => v.inner.first.map(a => Seq(a)).getOrElse(Seq.empty)
+    ++
+    v.inner.inner.map(a => a._2)
+  ).getOrElse(Seq.empty)
+}
+
+
+
+case class PMakeExp(keyword: PKw.MakeExp, constTyp: PType, callArgs: PDelimited.Comma[PSym.Paren, PExp])(val pos: (Position, Position))
+  extends PCallLike with PLocationAccess with PAccAssertion with PAssignTarget {
+
+  def refff: PIdnRef[_] = PIdnRef(constTyp match {
+    case p: PDomainType => p.domain.name
+    case _ => "unknown"
+  })(constTyp.pos)
+
+  def idnref: PIdnUse = refff
+
+  override def loc = this
+  override def perm = PFullPerm.implied()
+
+  override def signatures: List[PTypeSubstitution] = (funcDecl match {
+    case Some(pf: PFunction) if pf.formalArgs.size == args.size => List(
+      (args.indices.map(i => POpApp.pArgS(i) -> pf.formalArgs(i).typ) :+ (POpApp.pResS -> pf.typ.resultType)).toMap
+    )
+    case Some(pdf: PDomainFunction) if pdf.formalArgs.size == args.size && domainTypeRenaming.isDefined => List(
+      (args.indices.map(i => POpApp.pArgS(i) -> pdf.formalArgs(i).typ.substitute(domainTypeRenaming.get)) :+
+        (POpApp.pResS -> pdf.typ.resultType.substitute(domainTypeRenaming.get))).toMap
+    )
+    case Some(pp: PPredicate) if pp.formalArgs.size == args.size => List(
+      (args.indices.map(i => POpApp.pArgS(i) -> pp.formalArgs(i).typ) :+ (POpApp.pResS -> pp.resultType)).toMap
+    )
+    // this case is handled in Resolver.scala (- method check) which generates the appropriate error message
+    case _ => Nil
+  })
+
+  def funcDecl: Option[PAnyFunction] = idnref.decl.filter(_.isInstanceOf[PAnyFunction]).map(_.asInstanceOf[PAnyFunction])
+  def methodDecl: Option[PMethod] = idnref.decl.filter(_.isInstanceOf[PMethod]).map(_.asInstanceOf[PMethod])
+  // def formalArgs: Option[Seq[PFormalArgDecl]] = decl.map(_.formalArgs)
+
+  override def extraLocalTypeVariables = _extraLocalTypeVariables
+
+  var _extraLocalTypeVariables: Set[PDomainType] = Set()
+  var domainTypeRenaming: Option[PTypeRenaming] = None
+
+  def isDomainFunction = domainTypeRenaming.isDefined
+  def isPredicate = funcDecl.map(_.isInstanceOf[PPredicate]).getOrElse(false)
+  def isMethod = methodDecl.isDefined
+
+  var domainSubstitution: Option[PTypeSubstitution] = None
+
+  override def forceSubstitution(ots: PTypeSubstitution) = {
+
+    val ts = domainTypeRenaming match {
+      case Some(dtr) =>
+        val s3 = PTypeSubstitution(dtr.mm.map(kv => kv._1 -> (ots.get(kv._2) match {
+          case Some(pt) => pt
+          case None => PTypeSubstitution.defaultType
+        })))
+        assert(s3.m.keySet == dtr.mm.keySet)
+        assert(s3.m.forall(_._2.isGround))
+        domainSubstitution = Some(s3)
+        dtr.mm.values.foldLeft(ots)(
+          (tss, s) => if (tss.contains(s)) tss else tss.add(s, PTypeSubstitution.defaultType).getOrElse(null))
+      case _ => ots
+    }
+    super.forceSubstitution(ts)
+  }
 }
 
 case class PDomainFunctionInterpretation(k: PKw.Interpretation, i: PStringLiteral)(val pos: (Position, Position)) extends PNode
