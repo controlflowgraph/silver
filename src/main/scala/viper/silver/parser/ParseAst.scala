@@ -611,6 +611,31 @@ case class PFunctionType(argTypes: Seq[PType], resultType: PType) extends PInter
   }
 }
 
+object GenericParameterInstantiationHelper
+{
+  def instantiateType(typ: PType, generics: Set[String]): PType = {
+    typ match {
+      case dt@PDomainType(dom, args) =>
+        if (generics.contains(dom.name)) {
+          PTypeVar(dom.name)
+        }
+        else {
+          val res: Seq[PType] = args.map(a => a.inner.toSeq.map(c => instantiateType(c, generics)))
+            .getOrElse(Nil);
+          dt.withTypeArguments(res)
+        }
+      case gt: PGenericType => gt.withTypeArguments(gt.typeArguments.map(t => instantiateType(t, generics)))
+      case f: PFunctionType => PFunctionType(f.argTypes.map(a => instantiateType(a, generics)), instantiateType(f.resultType, generics))
+      case i: PInternalType => i
+      case p: PPrimitiv[_] => p
+      case _ => {
+        println(s"unknown typ ${typ}")
+        typ
+      }
+    }
+  }
+}
+
 ///////////////////////////////////////////////////////////////////////////////////////
 // Expressions
 // typeSubstitutions are the possible substitutions used for type checking and inference
@@ -1630,6 +1655,7 @@ case class PProgram(imported: Seq[PProgram], members: Seq[PMember])(
   val imports: Seq[PImport] = members.collect { case i: PImport => i } ++ imported.flatMap(_.imports)
   val macros: Seq[PDefine] = members.collect { case m: PDefine => m } ++ imported.flatMap(_.macros)
   val domains: Seq[PDomain] = members.collect { case d: PDomain => d } ++ imported.flatMap(_.domains)
+  val datatypes: Seq[PDatatype] = members.collect { case d: PDatatype => d } ++ imported.flatMap(_.datatypes)
   val fields: Seq[PFields] = members.collect { case f: PFields => f } ++ imported.flatMap(_.fields)
   val functions: Seq[PFunction] = members.collect { case f: PFunction => f } ++ imported.flatMap(_.functions)
   val predicates: Seq[PPredicate] = members.collect { case p: PPredicate => p } ++ imported.flatMap(_.predicates)
@@ -1682,30 +1708,106 @@ case class PDomain(annotations: Seq[PAnnotation], domain: PKw.Domain, idndef: PI
   def axioms: Seq[PAxiom] = members.inner.toSeq.collect { case a: PAxiom => a }
 }
 
-case class PDatatypeFieldDecl(var idndef: PIdnDef, c: PSym.Colon, typ: PType)(val pos: (Position, Position)) extends PTypedDeclaration with PLocalDeclaration {
+case class PDatatypeFieldDecl(var idndef: PIdnDef, c: PSym.Colon, typ: PType)(val pos: (Position, Position)) extends PTypedDeclaration with PMemberDeclaration {
   var decl: Option[PDatatypeFields] = None
   //  override def annotations = decl.toSeq.flatMap(_.annotations)
+
+  def adjustNamePrefix(name: String): PDatatypeFieldDecl = {
+    PDatatypeFieldDecl(
+      PIdnDef(s"${name}${'$'}${this.idndef.name}")(this.idndef.pos),
+      this.c,
+      this.typ
+    )(this.pos)
+  }
+
+
+  def adjustTypeVars(generics: Set[String]): PDatatypeFieldDecl = {
+    PDatatypeFieldDecl(
+      this.idndef,
+      this.c,
+      GenericParameterInstantiationHelper.instantiateType(this.typ, generics)
+    )(this.pos)
+  }
 }
 
 case class PDatatypeFields(annotations: Seq[PAnnotation], field: PKw.Field, fields: PDelimited[PDatatypeFieldDecl, PSym.Comma], s: Option[PSym.Semi])(val pos: (Position, Position)) extends PMember {
   override def declares: Seq[PGlobalDeclaration] = Seq.empty
-}
 
+  def mapFieldsDelimited(name: String, fields: PDelimited[PDatatypeFieldDecl, PSym.Comma]): PDelimited[PDatatypeFieldDecl, PSym.Comma] = {
+    PDelimited(
+      fields.first.map(_.adjustNamePrefix(name)),
+      fields.inner.map(f => (f._1, f._2.adjustNamePrefix(name))),
+      fields.end
+    )(fields.pos)
+  }
+
+  def mapFields(name: String): PDatatypeFields = {
+    PDatatypeFields(
+      this.annotations,
+      this.field,
+      mapFieldsDelimited(name, this.fields),
+      this.s
+    )(this.pos)
+  }
+
+  def adjustTypeVarsDelimited(generics: Set[String], fields: PDelimited[PDatatypeFieldDecl, PSym.Comma]): PDelimited[PDatatypeFieldDecl, PSym.Comma] = {
+    PDelimited(
+      fields.first.map(_.adjustTypeVars(generics)),
+      fields.inner.map(f => (f._1, f._2.adjustTypeVars(generics))),
+      fields.end
+    )(fields.pos)
+  }
+
+  def adjustTypeVars(generics: Set[String]): PDatatypeFields = {
+    PDatatypeFields(
+      this.annotations,
+      this.field,
+      adjustTypeVarsDelimited(generics, this.fields),
+      this.s
+    )(this.pos)
+  }
+}
 
 case class PDatatype(annotations: Seq[PAnnotation], datatype: PKw.Datatype, idndef: PIdnDef, typVars: Option[PDelimited.Comma[PSym.Bracket, PTypeVarDecl]], content: PGrouped[PSym.Brace, Seq[PDatatypeFields]])
                     (val pos: (Position, Position)) extends PSingleMember with PTypeDeclaration {
+
+  def mapInnerFieldNames(name: String, decls: Seq[PDatatypeFields]): Seq[PDatatypeFields] = {
+    decls.map(_.mapFields(name))
+  }
+
+  def mapFieldNames(name: String, decls: PGrouped[PSym.Brace, Seq[PDatatypeFields]]): PGrouped[PSym.Brace, Seq[PDatatypeFields]] = {
+    PGrouped[PSym.Brace, Seq[PDatatypeFields]](decls.l, mapInnerFieldNames(name, decls.inner), decls.r)(decls.pos)
+  }
+
+  def transformNames(): PDatatype = {
+    PDatatype(annotations, datatype, idndef, typVars, this.mapFieldNames(idndef.name, content))(pos)
+  }
+
+  def adjustInnerTypeVars(generics: Set[String], decls: Seq[PDatatypeFields]): Seq[PDatatypeFields] = {
+    decls.map(_.adjustTypeVars(generics))
+  }
+
+  def adjustFieldTypeVars(name: Set[String]): PGrouped[PSym.Brace, Seq[PDatatypeFields]] = {
+    PGrouped[PSym.Brace, Seq[PDatatypeFields]](this.content.l, adjustInnerTypeVars(name, this.content.inner), this.content.r)(this.content.pos)
+  }
+
+
   def typVarsSeq: Seq[PTypeVarDecl] = typVars.map(_.inner.toSeq).getOrElse(Nil)
+
+  def replaceTypeVars(): PDatatype = {
+    val generics = this.typVars.map(t => t.inner.toSeq.map(_.idndef.name)).getOrElse(Nil).toSet
+    PDatatype(this.annotations, this.datatype, this.idndef, this.typVars, adjustFieldTypeVars(generics))(this.pos)
+  }
 
 
   def containedFields: Seq[PDatatypeFields] = content.inner
 
+  def getFieldDeclByName(name: String): Option[PDatatypeFieldDecl] = containedFieldDecls.find(f => f.idndef.name.equals(s"${this.idndef.name}${'$'}${name}"))
+
+  def getFieldDeclTypeByName(name: String): Option[PType] = getFieldDeclByName(name).map(_.typ)
+
   def containedFieldDecls: Seq[PDatatypeFieldDecl] = this.containedFields
     .flatMap(f => f.fields.first)
-
-  def typeVarDecls: Seq[PTypeVarDecl] = this.typVars.map(v => v.inner.first.map(a => Seq(a)).getOrElse(Seq.empty)
-    ++
-    v.inner.inner.map(a => a._2)
-  ).getOrElse(Seq.empty)
 }
 
 

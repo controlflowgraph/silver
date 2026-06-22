@@ -918,7 +918,7 @@ class FastParser {
         fields /*.map(v => {
           val updatedInner = (v.inner._1, v.inner._2.map(c => c.withName(name.name)))
           PGrouped[PSym.Brace, (Seq[PDatatypeFields], Seq[PConstructor])](v.l, updatedInner, v.r)(v.pos)
-        })*/)(ap.pos)
+        })*/)(ap.pos).transformNames().replaceTypeVars()
   }
 
   def makeExp[$: P]: P[PKw.MakeExp => Pos => PMakeExp] = P(typ.lw ~~ argList(exp)).map {

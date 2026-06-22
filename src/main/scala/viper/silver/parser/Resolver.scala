@@ -16,7 +16,7 @@ import scala.collection.mutable
   */
 case class Resolver(p: PProgram) {
   val names = NameAnalyser()
-  val typechecker = TypeChecker(names)
+  val typechecker = TypeChecker(p, names)
 
   def run(warnAboutFunctionPermAmounts: Boolean): Option[PProgram] = {
     val nameSuccess = names.run(p)
@@ -47,7 +47,11 @@ case class Resolver(p: PProgram) {
 /**
   * Performs type-checking and sets the type of all typed nodes.
   */
-case class TypeChecker(names: NameAnalyser) {
+case class TypeChecker(program: PProgram, names: NameAnalyser) {
+
+  def this(names: NameAnalyser) = {
+    this(null, names)
+  }
 
   import TypeHelper._
 
@@ -73,6 +77,7 @@ case class TypeChecker(names: NameAnalyser) {
      * must be checked before their application is checked. Especially, this is because type variables in signatures
      * must be resolved. However, the checks in the following block are independent of each other.
      */
+    p.datatypes foreach checkDatatype
     p.domains foreach checkFunctions
     p.fields foreach check
     p.functions foreach checkDeclaration
@@ -101,6 +106,12 @@ case class TypeChecker(names: NameAnalyser) {
     curMember = m
     fcheck
     curMember = oldCurMember
+  }
+
+  def checkDatatype(d: PDatatype): Unit = {
+    checkMember(d) {
+      println(s"checking ${d.idndef.name}")
+    }
   }
 
   def checkDeclaration(m: PMethod): Unit = {
@@ -292,14 +303,32 @@ case class TypeChecker(names: NameAnalyser) {
             messages ++= FastMessaging.message(idnuse, s"ambiguous identifier `${idnref.name}`, expected single parameter or local variable")
         } else
           messages ++= FastMessaging.message(idnuse, s"undeclared identifier `${idnref.name}`, expected parameter or local variable")
-      case fa@PFieldAccess(_, _, field) =>
-        field.assignUse = true
-        if (field.decl.isDefined)
-          check(fa, field.decl.get.typ)
-        else if (field.decls.length > 1)
-          messages ++= FastMessaging.message(field, s"ambiguous field `${field.name}`")
-        else
-          messages ++= FastMessaging.message(field, s"undeclared field `${field.name}`")
+      case fa@PFieldAccess(rcv, _, field) =>
+        getDatatypeByName(rcv.typ) match {
+          case Some(dt) => {
+            getInstantiatedFieldType(rcv.typ, field.name) match {
+              case Some(fieldType) => {
+                println(s"Setting type of field access during assign to ${fieldType}")
+                fa.typ = fieldType
+
+                // TODO CFG: check with respect to a specific type
+//                if (field.decl.isDefined)
+//                  check(fa, field.decl.get.typ)
+              }
+              case None => messages ++= FastMessaging.message(fa, s"datatype `${dt.idndef.name}` does not have field ${field.name}")
+            }
+
+          }
+          case None => {
+            field.assignUse = true
+            if (field.decl.isDefined)
+              check(fa, field.decl.get.typ)
+            else if (field.decls.length > 1)
+              messages ++= FastMessaging.message(field, s"ambiguous field `${field.name}`")
+            else
+              messages ++= FastMessaging.message(field, s"undeclared field `${field.name}`")
+          }
+        }
       case call: PCall => sys.error(s"Unexpected node $call found")
     }
     // Check rhs
@@ -404,6 +433,46 @@ case class TypeChecker(names: NameAnalyser) {
       messages ++= FastMessaging.message(e, "magic wands are not supported in function preconditions or predicates")
     })
 
+  def getDatatypeByName(name: String): Option[PDatatype] = {
+    this.program.datatypes
+      .find(_.idndef.name.equals(name))
+  }
+
+  def getDatatypeByName(typ: PType): Option[PDatatype] = {
+    typ match {
+      case PDomainType(dom, args) => getDatatypeByName(dom.name)
+      case _ => None
+    }
+  }
+
+
+  def getInstantiatedFieldType(t: PType, fieldName: String): Option[PType] = {
+    t match {
+      case PDomainType(dom, args) => {
+        getDatatypeByName(dom.name) match {
+          case Some(d) => {
+            d.getFieldDeclTypeByName(fieldName) match {
+              case Some(fieldTyp) => {
+                // TODO: substitute args for parameters
+                val elems: Seq[(String, PType)] = d.typVarsSeq.zip(args.map(v => v.inner.toSeq).getOrElse(Nil))
+                  .map(f => (f._1.idndef.name, f._2))
+                val ts: PTypeSubstitution = PTypeSubstitution(elems.toMap)
+                Some(fieldTyp.substitute(ts))
+
+              }
+              case None => {
+                println(s"No field in the datatype ${fieldName}")
+                None
+              }
+            }
+          }
+          case None => None
+        }
+      }
+      case _ => None
+    }
+  }
+
   def check(typ: PType): Unit = {
     typ match {
       case PPrimitiv(_) =>
@@ -415,32 +484,42 @@ case class TypeChecker(names: NameAnalyser) {
 
         args foreach (_.inner.toSeq foreach check)
 
-        dt.kind = PDomainTypeKinds.Undeclared
+        val datatype = getDatatypeByName(dt.domain.name)
 
-        if (domain.decls.isEmpty) {
-          if (args.isDefined)
-            messages ++= FastMessaging.message(dt, s"undeclared type `${domain.name}`, expected domain")
-          else
-            messages ++= FastMessaging.message(dt, s"undeclared type `${domain.name}`")
-        } else {
-          if (args.isDefined) {
-            if (domain.filterDecls(d => d.isInstanceOf[PDomain] && d.asInstanceOf[PDomain].typVars.isDefined && d.asInstanceOf[PDomain].typVars.get.inner.length == args.get.inner.length))
-              messages ++= FastMessaging.message(dt, s"undeclared type `${domain.name}`, expected domain with ${args.get.inner.length} type argument${if (args.get.inner.length == 1) "" else "s"}")
-          } else {
-            if (domain.filterDecls(d => !d.isInstanceOf[PDomain] || (d.isInstanceOf[PDomain] && d.asInstanceOf[PDomain].typVars.isEmpty)))
-              messages ++= FastMessaging.message(dt, s"undeclared type `${domain.name}`, found domain with type arguments")
+        datatype match {
+          case Some(d) => {
+            dt.kind = PDomainTypeKinds.Datatype
+            // TODO CFG: ensure number of parameters matches
           }
+          case None => {
+            dt.kind = PDomainTypeKinds.Undeclared
 
-          if (domain.decl.isEmpty) {
-            if (domain.decls.length > 1)
-              messages ++= FastMessaging.message(dt, s"ambiguous type `${domain.name}`")
-          } else domain.decl.get match {
-            case PDomain(_, _, _, typVars, _, _) =>
-              // Should never fail, checked above with `filterDecls`
-              ensure(args.map(_.inner.length) == typVars.map(_.inner.length), typ, "wrong number of type arguments")
-              dt.kind = PDomainTypeKinds.Domain
-            case PTypeVarDecl(_) =>
-              dt.kind = PDomainTypeKinds.TypeVar
+            if (domain.decls.isEmpty) {
+              if (args.isDefined)
+                messages ++= FastMessaging.message(dt, s"undeclared type `${domain.name}`, expected domain")
+              else
+                messages ++= FastMessaging.message(dt, s"undeclared type `${domain.name}`")
+            } else {
+              if (args.isDefined) {
+                if (domain.filterDecls(d => d.isInstanceOf[PDomain] && d.asInstanceOf[PDomain].typVars.isDefined && d.asInstanceOf[PDomain].typVars.get.inner.length == args.get.inner.length))
+                  messages ++= FastMessaging.message(dt, s"undeclared type `${domain.name}`, expected domain with ${args.get.inner.length} type argument${if (args.get.inner.length == 1) "" else "s"}")
+              } else {
+                if (domain.filterDecls(d => !d.isInstanceOf[PDomain] || (d.isInstanceOf[PDomain] && d.asInstanceOf[PDomain].typVars.isEmpty)))
+                  messages ++= FastMessaging.message(dt, s"undeclared type `${domain.name}`, found domain with type arguments")
+              }
+
+              if (domain.decl.isEmpty) {
+                if (domain.decls.length > 1)
+                  messages ++= FastMessaging.message(dt, s"ambiguous type `${domain.name}`")
+              } else domain.decl.get match {
+                case PDomain(_, _, _, typVars, _, _) =>
+                  // Should never fail, checked above with `filterDecls`
+                  ensure(args.map(_.inner.length) == typVars.map(_.inner.length), typ, "wrong number of type arguments")
+                  dt.kind = PDomainTypeKinds.Domain
+                case PTypeVarDecl(_) =>
+                  dt.kind = PDomainTypeKinds.TypeVar
+              }
+            }
           }
         }
 
@@ -727,11 +806,26 @@ case class TypeChecker(names: NameAnalyser) {
                 checkMagicWand(wand)
 
               // We checked that the `rcv` is valid above with `poa.args.foreach(checkInternal)`
-              case PFieldAccess(_, _, idnref) =>
-                if (idnref.decls.isEmpty)
-                  issueError(idnref, s"undeclared field `${idnref.name}`")
-                else if (idnref.decl.isEmpty)
-                  issueError(idnref, s"ambiguous field `${idnref.name}`")
+              case fa@PFieldAccess(rcv, _, idnref) =>
+                getDatatypeByName(rcv.typ) match {
+                  case Some(dt) => {
+                    getInstantiatedFieldType(rcv.typ, idnref.name) match {
+                      case Some(fieldType) => {
+                        println(s"Setting type of field access to ${fieldType}")
+                        fa.typ = fieldType
+                      }
+                      case None => issueError(idnref, s"datatype `${dt.idndef.name}` has no field  ${idnref}")
+                    }
+
+                  }
+                  case None => {
+                    if (idnref.decls.isEmpty)
+                      issueError(idnref, s"undeclared field `${idnref.name}`   ${rcv.typ}")
+                    else if (idnref.decl.isEmpty)
+                      issueError(idnref, s"ambiguous field `${idnref.name}`    ${rcv.typ}")
+                  }
+                }
+
 
               case acc: PAccPred =>
                 acc.loc match {
