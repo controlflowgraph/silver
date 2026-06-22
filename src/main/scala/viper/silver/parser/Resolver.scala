@@ -110,6 +110,7 @@ case class TypeChecker(program: PProgram, names: NameAnalyser) {
 
   def checkDatatype(d: PDatatype): Unit = {
     checkMember(d) {
+      // TODO CFG: check the datatype
       println(s"checking ${d.idndef.name}")
     }
   }
@@ -304,17 +305,11 @@ case class TypeChecker(program: PProgram, names: NameAnalyser) {
         } else
           messages ++= FastMessaging.message(idnuse, s"undeclared identifier `${idnref.name}`, expected parameter or local variable")
       case fa@PFieldAccess(rcv, _, field) =>
+        checkTopTyped(rcv, None)
         getDatatypeByName(rcv.typ) match {
           case Some(dt) => {
             getInstantiatedFieldType(rcv.typ, field.name) match {
-              case Some(fieldType) => {
-                println(s"Setting type of field access during assign to ${fieldType}")
-                fa.typ = fieldType
-
-                // TODO CFG: check with respect to a specific type
-//                if (field.decl.isDefined)
-//                  check(fa, field.decl.get.typ)
-              }
+              case Some(fieldType) => check(fa, fieldType)
               case None => messages ++= FastMessaging.message(fa, s"datatype `${dt.idndef.name}` does not have field ${field.name}")
             }
 
@@ -326,7 +321,7 @@ case class TypeChecker(program: PProgram, names: NameAnalyser) {
             else if (field.decls.length > 1)
               messages ++= FastMessaging.message(field, s"ambiguous field `${field.name}`")
             else
-              messages ++= FastMessaging.message(field, s"undeclared field `${field.name}`")
+              messages ++= FastMessaging.message(field, s"123 undeclared field `${field.name}`")
           }
         }
       case call: PCall => sys.error(s"Unexpected node $call found")
@@ -356,7 +351,7 @@ case class TypeChecker(program: PProgram, names: NameAnalyser) {
         fields.inner match {
           case Right(fields) => fields.toSeq foreach (f => {
             if (f.decls.isEmpty)
-              messages ++= FastMessaging.message(f, s"undeclared field `${f.name}`")
+              messages ++= FastMessaging.message(f, s"456 undeclared field `${f.name}`")
             else if (f.decls.length > 1)
               messages ++= FastMessaging.message(f, s"ambiguous field `${f.name}`")
           })
@@ -720,6 +715,11 @@ case class TypeChecker(program: PProgram, names: NameAnalyser) {
         is preferred or a simplistic approach.
        */
 
+      case m: PMakeExp => {
+        // TODO CFG: fix this
+        setType(m.constTyp)
+      }
+
       case t: PExtender => t.typecheck(this, names).getOrElse(Nil) foreach (message =>
         messages ++= FastMessaging.message(t, message))
       case PAnnotatedExp(_, e) =>
@@ -736,6 +736,9 @@ case class TypeChecker(program: PProgram, names: NameAnalyser) {
         }
 
       case poa: POpApp =>
+        var isSpecialLookup: Boolean = false
+        var resultingFieldType: PType = null
+
         if (poa.typeSubstitutions.isEmpty) {
           poa.args.foreach(checkInternal)
           var nestedTypeError = !poa.args.forall(a => a.typ.isValidOrUndeclared)
@@ -811,8 +814,9 @@ case class TypeChecker(program: PProgram, names: NameAnalyser) {
                   case Some(dt) => {
                     getInstantiatedFieldType(rcv.typ, idnref.name) match {
                       case Some(fieldType) => {
-                        println(s"Setting type of field access to ${fieldType}")
                         fa.typ = fieldType
+                        isSpecialLookup = true
+                        resultingFieldType = fieldType
                       }
                       case None => issueError(idnref, s"datatype `${dt.idndef.name}` has no field  ${idnref}")
                     }
@@ -820,7 +824,7 @@ case class TypeChecker(program: PProgram, names: NameAnalyser) {
                   }
                   case None => {
                     if (idnref.decls.isEmpty)
-                      issueError(idnref, s"undeclared field `${idnref.name}`   ${rcv.typ}")
+                      issueError(idnref, s"789 undeclared field `${idnref.name}`   ${rcv.typ}")
                     else if (idnref.decl.isEmpty)
                       issueError(idnref, s"ambiguous field `${idnref.name}`    ${rcv.typ}")
                   }
@@ -858,9 +862,19 @@ case class TypeChecker(program: PProgram, names: NameAnalyser) {
             }
           }
 
-          if (poa.signatures.nonEmpty && poa.args.forall(_.typeSubstitutions.nonEmpty) && !nestedTypeError) {
+
+          if ((poa.signatures.nonEmpty || isSpecialLookup) && poa.args.forall(_.typeSubstitutions.nonEmpty) && !nestedTypeError) {
             val ltr = getFreshTypeSubstitution(poa.localScope.toList) //local type renaming - fresh versions
-            val rlts = poa.signatures map (ts => refreshWith(ts, ltr)) //local substitutions refreshed
+            val rlts = (if(isSpecialLookup)
+              poa match {
+                case PFieldAccess(rcv, _, field) => {
+                  val signatureList = List(
+                    Map(POpApp.pArgS(0) -> rcv.typ, POpApp.pResS -> resultingFieldType)
+                  )
+                  signatureList map (ts => refreshWith(ts, ltr))
+                }
+              }
+            else poa.signatures map (ts => refreshWith(ts, ltr))) //local substitutions refreshed)
             val rrt: PDomainType = POpApp.pRes.substitute(ltr).asInstanceOf[PDomainType] // return type (which is a dummy type variable) replaced with fresh type
             // Continue only if there was no error in the arguments
             if (rlts.nonEmpty && poa.args.forall(_.typeSubstitutions.nonEmpty) && !nestedTypeError) {
@@ -887,8 +901,9 @@ case class TypeChecker(program: PProgram, names: NameAnalyser) {
               if (ts.size == 1) {
                 poa.typeSubstitutions += rlts.find(_.contains(rrt)).get
                 poa.typ = ts.head
-              } else
+              } else {
                 poa.typ = PUnknown()
+              }
             }
           }
         }
