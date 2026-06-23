@@ -487,6 +487,8 @@ case class PDomainType(domain: PIdnRef[PTypeDeclaration], args: Option[PDelimite
     if (s.length == 0 && args.isEmpty) this else copy(args = Some(args.get.update(s)))(pos)
 
   override def copyExtraVars(from: Any): Unit = this.kind = from.asInstanceOf[PDomainType].kind
+
+  override def toString(): String = s"${this.kind} " + (if (this.kind == PDomainTypeKinds.TypeVar) "##" else "") + s"${this.domain.name}[${this.typeArguments.map(t => t.toString()).toSet}]"
 }
 
 object PDomainTypeKinds {

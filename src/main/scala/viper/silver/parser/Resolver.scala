@@ -8,6 +8,8 @@ package viper.silver.parser
 
 import viper.silver.FastMessaging
 import viper.silver.parser.PKw.Requires
+import viper.silver.parser.PSymOp.{EqEq, Ne}
+import viper.silver.plugin.standard.adt.PAdtOpApp
 
 import scala.collection.mutable
 
@@ -108,10 +110,32 @@ case class TypeChecker(program: PProgram, names: NameAnalyser) {
     curMember = oldCurMember
   }
 
+  def checkUniqueness[T](elems: Seq[T], loc: PNode, ctx: String, form: T => String): Unit = {
+    var duplicate: Set[T] = Set()
+    var current: Seq[T] = elems
+    while(current != Nil)
+    {
+
+      if(current.tail.contains(current.head))
+      {
+        duplicate = duplicate.union(Set(current.head))
+      }
+      current = current.tail
+    }
+
+    duplicate.foreach(d => {
+      messages ++= FastMessaging.message(loc, s"duplicate element `${form(d)}` in ${ctx}")
+    })
+  }
+
   def checkDatatype(d: PDatatype): Unit = {
     checkMember(d) {
       // TODO CFG: check the datatype
-      println(s"checking ${d.idndef.name}")
+      checkUniqueness[PTypeVarDecl](d.typVars.map(c => c.inner.toSeq).getOrElse(Nil), d, s"generic parameters of `${d.idndef.name}`", v => v.idndef.name)
+      checkUniqueness[String](d.containedFieldDecls.map(c => c.idndef.name), d, s"field names of `${d.idndef.name}`", v => v.replaceFirst(d.idndef.name + "\\$", ""))
+      // checking the types of the fields so they are resolved
+      d.containedFields.flatMap(f => f.fields.toSeq)
+        .foreach(c => check(c.typ))
     }
   }
 
@@ -483,7 +507,12 @@ case class TypeChecker(program: PProgram, names: NameAnalyser) {
 
         datatype match {
           case Some(d) => {
-            dt.kind = PDomainTypeKinds.Datatype
+            val expectedNumArgs = d.typVars.map(v => v.inner.toSeq).getOrElse(Nil).length
+            val actualNumArgs = dt.typeArguments.length
+            if (expectedNumArgs != actualNumArgs)
+              messages ++= FastMessaging.message(dt, s"diverging number of type parameters for type `${domain.name}`, expected $expectedNumArgs got $actualNumArgs")
+            else
+              dt.kind = PDomainTypeKinds.Datatype
             // TODO CFG: ensure number of parameters matches
           }
           case None => {
@@ -642,6 +671,13 @@ case class TypeChecker(program: PProgram, names: NameAnalyser) {
         exp.forceSubstitution(ts)
         error = oexpected.isDefined && !isSubtype(exp.typ, oexpected.get)
       }
+      // special logic to resolve ambiguity of null literal and expected DT type
+      if(oexpected.isDefined && exp.isInstanceOf[PNullLit] && getDatatypeByName(oexpected.get).isDefined)
+      {
+        exp.typ = oexpected.get
+        error = false
+      }
+
       if (error) oexpected match {
         case Some(expected) =>
           val reportedActual = if (exp.typ.isGround) {
@@ -649,7 +685,7 @@ case class TypeChecker(program: PProgram, names: NameAnalyser) {
           } else {
             exp.typ.substitute(selectAndGroundTypeSubstitution(exp, exp.typeSubstitutions))
           }
-          messages ++= FastMessaging.message(exp, s"found incompatible type `${reportedActual.pretty}`, expected `${expected.pretty}`")
+          messages ++= FastMessaging.message(exp, s"123 found incompatible type `${reportedActual.pretty}`, expected `${expected.pretty}`")
         case None =>
           typeError(exp)
       }
@@ -876,6 +912,26 @@ case class TypeChecker(program: PProgram, names: NameAnalyser) {
               }
             else poa.signatures map (ts => refreshWith(ts, ltr))) //local substitutions refreshed)
             val rrt: PDomainType = POpApp.pRes.substitute(ltr).asInstanceOf[PDomainType] // return type (which is a dummy type variable) replaced with fresh type
+
+            poa match {
+              case exp: PBinExp => {
+                // special case for comparing a datatype to null which is ambiguous with the ref type
+                val leftIsDT = getDatatypeByName(exp.left.typ).isDefined
+                val rightIsDT = getDatatypeByName(exp.right.typ).isDefined
+                if(exp.op.rs == EqEq || exp.op.rs == Ne) {
+                  if(leftIsDT && exp.right.isInstanceOf[PNullLit])
+                  {
+                    exp.right.typ = exp.left.typ
+                  }
+
+                  if(rightIsDT && exp.left.isInstanceOf[PNullLit])
+                  {
+                    exp.left.typ = exp.right.typ
+                  }
+                }
+              }
+              case _ =>
+            }
             // Continue only if there was no error in the arguments
             if (rlts.nonEmpty && poa.args.forall(_.typeSubstitutions.nonEmpty) && !nestedTypeError) {
               val flat = poa.args.indices map (i => POpApp.pArg(i).substitute(ltr)) //fresh local argument types
@@ -913,8 +969,9 @@ case class TypeChecker(program: PProgram, names: NameAnalyser) {
           issueError(piu, s"undeclared identifier `${idnref.name}`")
         else if (idnref.decl.isEmpty)
           issueError(piu, s"ambiguous identifier `${idnref.name}`")
-        else
+        else {
           piu.typ = idnref.decl.get.typ
+        }
 
       case piu: PVersionedIdnUseExp =>
         if (piu.decls.isEmpty)
