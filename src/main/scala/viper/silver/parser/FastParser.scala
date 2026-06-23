@@ -1006,9 +1006,9 @@ class FastParser {
   }
 
   def methodDecl[$: P]: P[PKw.Method => PAnnotationsPosition => PMethod] =
-    P((idndef ~ argList(formalArg) ~~~ methodReturns.lw.? ~~ specifications(precondition) ~~ specifications(postcondition) ~~~ stmtBlock().lw.?) map {
-        case (idn, args, rets, pres, posts, body) => k =>
-          ap: PAnnotationsPosition => PMethod(ap.annotations, k, idn, args, rets, pres, posts, body)(ap.pos)
+    P((idndef ~~~ typeList(domainTypeVarDecl).lw.? ~ argList(formalArg) ~~~ methodReturns.lw.? ~~ specifications(precondition) ~~ specifications(postcondition) ~~~ stmtBlock().lw.?) map {
+        case (idn, gens, args, rets, pres, posts, body) => k =>
+          ap: PAnnotationsPosition => GenericParameterInstantiationHelper.processParametersMethod(PMethod(ap.annotations, k, idn, gens, args, rets, pres, posts, body)(ap.pos), gens.map(s => s.inner.toSeq.map(v => v.idndef.name)).getOrElse(Nil).toSet)
     })
 
   def methodReturns[$: P]: P[PMethodReturns] = P((P(PKw.Returns) ~ argList(idnTypeBinding.map(PFormalReturnDecl(_)))) map (PMethodReturns.apply _).tupled).pos

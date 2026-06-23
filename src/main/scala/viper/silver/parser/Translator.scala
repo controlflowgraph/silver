@@ -77,7 +77,7 @@ case class Translator(program: PProgram) {
   }
 
   private def translate(m: PMethod): Method = m match {
-    case PMethod(_, _, idndef, _, _, pres, posts, body) =>
+    case PMethod(_, _, idndef, _, _,  _, pres, posts, body) =>
       val m = findMethod(idndef)
 
       val newBody = body.map(actualBody => stmt(actualBody).asInstanceOf[Seqn])

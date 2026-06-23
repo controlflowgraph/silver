@@ -105,7 +105,7 @@ class TerminationPlugin(@unused reporter: viper.silver.reporter.Reporter,
       case d => d
     }).recurseFunc({ // decreases clauses can only appear in functions/methods pres, posts and methods bodies
       case PFunction(_, _, _, _, _, _, pres, posts, _) => Seq(pres, posts)
-      case PMethod(_, _, _, _, _, pres, posts, body) => Seq(pres, posts, body)
+      case PMethod(_, _, _, _, _, _, pres, posts, body) => Seq(pres, posts, body)
       case _: PMember => Nil
     }).execute(input)
     newProgram
