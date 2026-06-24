@@ -11,6 +11,12 @@ import viper.silver.ast.utility.Visitor
 import viper.silver.ast.utility.rewriter.{HasExtraValList, HasExtraVars, Rewritable, StrategyBuilder}
 import viper.silver.ast.{Exp, FilePosition, HasLineColumn, Member, NoPosition, Position, SourcePosition, Stmt, Type}
 import viper.silver.parser.TypeHelper._
+import viper.silver.plugin.sif.{PLowEventExp, PLowExp, PRelExp}
+import viper.silver.plugin.standard.adt.{PAdtOpApp, PConstructorCall, PDestructorCall, PDiscriminatorCall}
+import viper.silver.plugin.standard.predicateinstance.PPredicateInstance
+import viper.silver.plugin.standard.refute.PRefute
+import viper.silver.plugin.standard.smoke.PUnreachable
+import viper.silver.plugin.standard.termination.{PDecreasesClause, PDecreasesStar, PDecreasesTuple, PDecreasesWildcard}
 import viper.silver.verifier.ParseReport
 
 import scala.collection.Set
@@ -688,6 +694,233 @@ case class PFunctionType(argTypes: Seq[PType], resultType: PType) extends PInter
 }
 
 object GenericParameterInstantiationHelper {
+  def processParametersPredicate(pred: PPredicate, generics: Set[String]): PPredicate = {
+    try {
+      println("STARTING....")
+      val res = PPredicate(
+        pred.annotations,
+        pred.keyword,
+        pred.idndef,
+        pred.typVars,
+        pred.args.update(pred.args.inner.toSeq.map(c => processParametersFormalArgDecl(c, generics))),
+        pred.body.map(b => {
+          val processed: PExp = processParametersExp(b.e.inner, generics)
+          val e = b.e.update(processed)
+          PBracedExp(e)(b.pos)
+        }) // TODO CFG: fix this stuff when subbing the body
+      )(pred.pos)
+      println("STOPPING....")
+      res
+    } catch {
+      case e => {
+        println("ERRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRr")
+        println(e.toString)
+        println("ERRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRr")
+        throw new IllegalArgumentException()
+      }
+    }
+  }
+
+  def processParametersLocationAccess(acc: PLocationAccess, generics: Set[String]): PLocationAccess = {
+    acc match {
+      case p@PCall(idnref, callArgs, typeAnnotated) => {
+        val updatedArgs = callArgs.update(callArgs.inner.toSeq.map(e => processParametersExp(e, generics)))
+        PCall(idnref, updatedArgs, typeAnnotated)(p.pos)
+      }
+      case p@PConstructorCall(idnref, callArgs, typeAnnotated) => {
+        val updatedArgs = callArgs.update(callArgs.inner.toSeq.map(e => processParametersExp(e, generics)))
+        PConstructorCall(idnref, updatedArgs, typeAnnotated)(p.pos)
+      }
+      case p@PFieldAccess(rcv, dot, idnref) => {
+        val updatedExp = processParametersExp(rcv, generics)
+        PFieldAccess(updatedExp, dot, idnref)(p.pos)
+      }
+      case p@PMakeExp(keyword, constTyp, callArgs) => {
+        val updatedArgs = callArgs.update(callArgs.inner.toSeq.map(e => processParametersExp(e, generics)))
+        val updatedType = processParametersType(constTyp, generics)
+        PMakeExp(keyword, updatedType, updatedArgs)(p.pos)
+      }
+      case p@PPredCall(idnref, params, callArgs) => {
+        val updatedParams: Option[PGrouped[PSym.Bracket, PDelimited[PType, PReserved[PSym.Comma.type]]]] = params match {
+          case Some(value) => {
+            val result = value.update(value.inner.toSeq.map(v => processParametersType(v, generics)))
+            Some(result)
+          }
+          case None => None
+        }
+        val updatedArgs = callArgs.update(callArgs.inner.toSeq.map(e => processParametersExp(e, generics)))
+        PPredCall(idnref, updatedParams, updatedArgs)(p.pos)
+      }
+      case e => {
+        println(s"UNKNOWN APPLICATION: ${e}")
+        throw new IllegalArgumentException(s"Unknown application expression to process generic parameters! ${e.pretty}")
+      }
+    }
+  }
+
+  def processParametersExp(exp: PExp, generics: Set[String]): PExp = {
+    println(s"processing ${exp.pretty}")
+    exp match {
+      case assertion: PAccAssertion => assertion match {
+        case p@PPredCall(idnref, typVars, callArgs) => {
+          println(s"PreadCall here....")
+          val updatedArgs = callArgs.update(callArgs.inner.toSeq.map(e => processParametersExp(e, generics)))
+          PPredCall(idnref, typVars, updatedArgs)(p.pos)
+        }
+        case p@PCall(idnref, callArgs, typeAnnotated) => {
+          println(s"PCall here....")
+          val updatedArgs = callArgs.update(callArgs.inner.toSeq.map(e => processParametersExp(e, generics)))
+          PCall(idnref, updatedArgs, typeAnnotated)(p.pos)
+        }
+        case p@PAccPred(op, amount) => {
+          println(s"PAccPred here.... ${amount}")
+          val internal: PMaybePairArgument[PLocationAccess, PExp] = PMaybePairArgument(
+            processParametersLocationAccess(amount.inner.first, generics),
+            amount.inner.second.map(a => (a._1, processParametersExp(a._2, generics))))(amount.inner.pos)
+          val updatedAmount: PGrouped.Paren[PMaybePairArgument[PLocationAccess, PExp]] = amount.update(internal)
+          PAccPred(op, updatedAmount)(p.pos)
+        }
+        case p@PMakeExp(keyword, constTyp, callArgs) => {
+          val updatedType = processParametersType(constTyp, generics)
+          val updatedArgs = callArgs.update(callArgs.inner.toSeq.map(e => processParametersExp(e, generics)))
+          PMakeExp(keyword, updatedType, updatedArgs)(p.pos)
+        }
+      }
+      case p@PAnnotatedExp(annotation, e) => PAnnotatedExp(annotation, processParametersExp(e, generics))(p.pos)
+      case binder: PBinder => binder match {
+        case quantifier: PQuantifier => quantifier match {
+          case p@PExists(keyword, vars, c, triggers, body) => {
+            val updatedBody = processParametersExp(body, generics)
+            PExists(keyword, vars, c, triggers, updatedBody)(p.pos)
+          }
+          case p@PForall(keyword, vars, c, triggers, body) => {
+            val updatedBody = processParametersExp(body, generics)
+            PForall(keyword, vars, c, triggers, updatedBody)(p.pos)
+          }
+          case p@PForPerm(keyword, vars, trigger, c, body) => {
+            val updatedBody = processParametersExp(body, generics)
+            PForPerm(keyword, vars, trigger, c, updatedBody)(p.pos)
+          }
+        }
+      }
+      case clause: PDecreasesClause => clause match {
+        case p@PDecreasesTuple(tuple, condition) => {
+          val updatedTuple: PDelimited[PExp, PSym.Comma] = tuple.update(tuple.inner.map(e => processParametersExp(e._2, generics)))
+          val updatedCondition = condition.map(v => (v._1, processParametersExp(v._2, generics)))
+          PDecreasesTuple(updatedTuple, updatedCondition)(p.pos)
+        }
+        case p@PDecreasesWildcard(wildcard, condition) => {
+          val updatedCondition = condition.map(v => (v._1, processParametersExp(v._2, generics)))
+          PDecreasesWildcard(wildcard, updatedCondition)(p.pos)
+        }
+        case p@PDecreasesStar(star) => PDecreasesStar(star)(p.pos)
+      }
+      //case viper.silver.plugin.ParserPluginTemplate.PExampleExp() =>
+      case p@PIdnUseExp(idnref) => PIdnUseExp(idnref)
+      case p@PLet(l, variable, eq, exp, in, nestedScope) => {
+        val updatedExp = exp.update(processParametersExp(exp.inner, generics))
+        val updatedBody = processParametersExp(nestedScope.body, generics)
+        val updatedNestedScope = PLetNestedScope(updatedBody)(nestedScope.pos)
+        PLet(l, variable, eq, updatedExp, in, updatedNestedScope)(p.pos)
+      }
+      case p@PLowEventExp() => PLowEventExp()(p.pos)
+      case p@PLowExp(e) => {
+        val updatedExp = processParametersExp(e, generics)
+        PLowExp(updatedExp)(p.pos)
+      }
+      case p@PNewExp(keyword, fields) => PNewExp(keyword, fields)(p.pos)
+      case app: POpApp => app match {
+        case app: PAdtOpApp => app match {
+          case p@PConstructorCall(idnref, callArgs, typeAnnotated) => {
+            // TODO CFG: check if type annotated
+            val updatedArgs = callArgs.update(callArgs.inner.toSeq.map(e => processParametersExp(e, generics)))
+            PConstructorCall(idnref, updatedArgs, typeAnnotated)(p.pos)
+          }
+          case p@PDestructorCall(rcv, dot, idnref) => {
+            val updatedExp = processParametersExp(rcv, generics)
+            PDestructorCall(updatedExp, dot, idnref)(p.pos)
+          }
+          case p@PDiscriminatorCall(rcv, dot, is, idnref) => {
+            val updatedExp = processParametersExp(rcv, generics)
+            PDiscriminatorCall(updatedExp, dot, is, idnref)(p.pos)
+          }
+        }
+        case exp: PBinExp => exp match {
+          case p@PMagicWandExp(left, wand, right) => {
+            val updatedLeft = processParametersExp(left, generics)
+            val updatedRight = processParametersExp(right, generics)
+            PMagicWandExp(updatedLeft, wand, updatedRight)(p.pos)
+          }
+          case _ => {
+            val updatedLeft = processParametersExp(exp.left, generics)
+            val updatedRight = processParametersExp(exp.right, generics)
+            PBinExp(updatedLeft, exp.op, updatedRight)(exp.pos)
+          }
+        }
+        //        case keyword: PCallKeyword => ???
+        //        case like: PCallLike => ???
+        //        case PCondExp(cond, q, thn, c, els) => ???
+        case app: PHeapOpApp => app match {
+          case access: PResourceAccess => access match {
+            case p@PMagicWandExp(left, wand, right) => {
+              val updatedLeft = processParametersExp(left, generics)
+              val updatedRight = processParametersExp(right, generics)
+              PMagicWandExp(updatedLeft, wand, updatedRight)(p.pos)
+            }
+            case access: PLocationAccess => processParametersLocationAccess(access, generics)
+          }
+          case PUnfolding(unfolding, acc, in, exp) => ???
+          case PApplying(applying, wand, in, exp) => ???
+          case PAsserting(asserting, a, in, exp) => ???
+          case PInhaleExhaleExp(l, in, c, ex, r) => ???
+          case PCurPerm(op, res) => ???
+          case POldExp(op, label, e) => ???
+          case PDebugLabelledOldExp(op, label, e) => ???
+        }
+        //        case PLookup(base, l, idx, r) => ???
+        //        case PMapDomain(keyword, base) => ???
+        //        case literal: PMapLiteral => ???
+        //        case PMapRange(keyword, base) => ???
+        //        case PMaplet(key, a, value) => ???
+        //        case PRangeSeq(l, low, ds, high, r) => ???
+        //        case PSeqSlice(seq, l, s, d, e, r) => ???
+        //        case PSize(l, seq, r) => ???
+        //        case PUnExp(op, exp) => ???
+        //        case PUpdate(base, l, key, a, value, r) => ???
+        case p@PFieldAccess(rcv, dot, idnref) => {
+          val updatedExp = processParametersExp(rcv, generics)
+          PFieldAccess(updatedExp, dot, idnref)(p.pos)
+        }
+        case e => {
+          println(s"UNKNOWN APPLICATION: ${e}")
+          throw new IllegalArgumentException(s"Unknown application expression to process generic parameters! ${e.pretty}")
+        }
+      }
+      case p@PPredicateInstance(m, idnuse, args) => {
+        val updatedArgs = args.update(args.inner.toSeq.map(e => processParametersExp(e, generics)))
+        PPredicateInstance(m, idnuse, updatedArgs)(p.pos)
+      }
+      case p@PRelExp(e, i) => PRelExp(e, i)(e.pos)
+      case literal: PSimpleLiteral => literal match {
+        case literal: PConstantLiteral => literal match {
+          case l@PBoolLit(keyword) => PBoolLit(keyword)(l.pos)
+          case l@PNullLit(keyword) => PNullLit(keyword)(l.pos)
+          case l@PNoPerm(keyword) => PNoPerm(keyword)(l.pos)
+          case l@PFullPerm(keyword) => PFullPerm(keyword)(l.pos)
+          case l@PWildcard(keyword) => PWildcard(keyword)(l.pos)
+          case l@PEpsilon(keyword) => PEpsilon(keyword)(l.pos)
+        }
+        case l@PIntLit(i) => PIntLit(i)(l.pos)
+        case l@PResultLit(result) => PResultLit(result)(l.pos)
+      }
+      case p@PVersionedIdnUseExp(name, version, separator) => PVersionedIdnUseExp(name, version, separator)(p.pos)
+      case e => {
+        throw new IllegalArgumentException(s"Unknown expression to process generic parameters! ${e.pretty}")
+      }
+    }
+  }
+
+
   def processParametersMethod(method: PMethod, generics: Set[String]): PMethod = {
     PMethod(
       method.annotations,
@@ -699,113 +932,156 @@ object GenericParameterInstantiationHelper {
       // TODO CFG: FIX THIS
       method.pres,
       method.posts,
-//      PSpecs(method.pres.specs.update(method.pres.specs.toSeq.map(c => processParametersPSpecification(c, generics))))(method.pres.pos),
-//      PSpecs(method.posts.specs.update(method.posts.specs.toSeq.map(c => processParametersPSpecification(c, generics))))(method.posts.pos),
-      method.body // method.body.map(c => processParametersMethodBody(c, generics)),
+      //      PSpecs(method.pres.specs.update(method.pres.specs.toSeq.map(c => processParametersPSpecification(c, generics))))(method.pres.pos),
+      //      PSpecs(method.posts.specs.update(method.posts.specs.toSeq.map(c => processParametersPSpecification(c, generics))))(method.posts.pos),
+      method.body.map(c => processParametersMethodBody(c, generics)),
     )(method.pos)
   }
 
-//  def processParametersStmt(stmt: PStmt, generics: Set[String]): PStmt = {
-//    stmt match {
-//      case PAnnotatedStmt(annotation, stmt) =>
-//      case PApplyWand(apply, e) =>
-//      case PAssert(assert, e) =>
-//      case PAssign(targets, op, rhs) =>
-//      case PAssume(assume, e) =>
-//      case PDefine(annotations, define, idndef, parameters, inner) =>
-//      case PElse(k, els) =>
-//      case viper.silver.plugin.ParserPluginTemplate.PExampleStmt() =>
-//      case PExhale(exhale, e) =>
-//      case PFold(fold, e) =>
-//      case PGoto(goto, target) =>
-//      case PIf(keyword, cond, thn, els) =>
-//      case continuation: PIfContinuation =>
-//      case PInhale(inhale, e) =>
-//      case PLabel(label, idndef, invs) =>
-//      case PMacroSeqn(ss) =>
-//      case PPackageWand(pckg, e, proofScript) =>
-//      case PQuasihavoc(quasihavoc, lhs, e) =>
-//      case PQuasihavocall(quasihavocall, vars, colons, lhs, e) =>
-//      case PRefute(refute, e) =>
-//      case PSeqn(ss) =>
-//      case PSkip() =>
-//      case PUnfold(unfold, e) =>
-//      case PUnreachable(kw) =>
-//      case PVars(keyword, vars, init) =>
-//      case PWhile(keyword, cond, invs, body) =>
-//      case _ =>
-//    }
-//  }
-//
-//  def processParametersMethodBody(body: PSeqn, generics: Set[String]): PSeqn = {
-//    PSeqn(
-//      body.ss.update(body.ss.inner.toSeq.map(f => processParametersStmt(f, generics)))
-//    )(body.pos)
-//  }
-//
-//  def processParametersExp(exp: PExp, generics: Set[String]): PExp = {
-//    exp match {
-//      case assertion: PAccAssertion => assertion match {
-//        case PCall(idnref, callArgs, typeAnnotated) =>PCall(idnref, callArgs.update(callArgs.inner.toSeq.map(f => processParametersExp(f, generics))))
-//        case PAccPred(op, amount) =>
-//        case PMakeExp(keyword, constTyp, callArgs) =>
-//      }
-//      case PAnnotatedExp(annotation, e) => ???
-//      case binder: PBinder => ???
-//      case s: PDecreasesStar => ???
-//      case w: PDecreasesWildcard => ???
-//      case t: PDecreasesTuple => ???
-////      case viper.silver.plugin.ParserPluginTemplate.PExampleExp() =>
-//      case i: PIdnUseExp => i
-//      case PLet(l, variable, eq, exp, in, nestedScope) => ???
-//      case PLowEventExp() => ???
-//      case PLowExp(e) => ???
-//      case PNewExp(keyword, fields) => ???
-//      case app: POpApp => app match {
-//        case app: PAdtOpApp =>
-//        case exp: PBinExp => exp match {
-//          case PMagicWandExp(left, wand, right) =>
-//          case _ =>
-//        }
-//        case keyword: PCallKeyword =>
-//        case like: PCallLike =>
-//        case PCondExp(cond, q, thn, c, els) =>
-//        case app: PHeapOpApp => app match {
-//          case access: PResourceAccess =>
-//          case PUnfolding(unfolding, acc, in, exp) =>
-//          case PApplying(applying, wand, in, exp) =>
-//          case PAsserting(asserting, a, in, exp) =>
-//          case PInhaleExhaleExp(l, in, c, ex, r) =>
-//          case PCurPerm(op, res) =>
-//          case POldExp(op, label, e) =>
-//          case PDebugLabelledOldExp(op, label, e) =>
-//        }
-//        case PLookup(base, l, idx, r) =>
-//        case PMapDomain(keyword, base) =>
-//        case literal: PMapLiteral =>
-//        case PMapRange(keyword, base) =>
-//        case PMaplet(key, a, value) =>
-//        case PRangeSeq(l, low, ds, high, r) =>
-//        case PSeqSlice(seq, l, s, d, e, r) =>
-//        case PSize(l, seq, r) =>
-//        case PUnExp(op, exp) =>
-//        case PUpdate(base, l, key, a, value, r) =>
-//        case _ =>
-//      }
-//      case PPredicateInstance(m, idnuse, args) => ???
-//      case PRelExp(e, i) => e.
-//      case literal: PSimpleLiteral => ???
-//      case PVersionedIdnUseExp(name, version, separator) => ???
-//      case _ => ???
-//    }
-//  }
+  def processParametersElse(els: PElse, generics: Set[String]): PElse = {
+    PElse(els.k, processParametersSeqn(els.els, generics))(els.pos)
+  }
 
-//  def processParametersPSpecification[T <: PKw.Spec](spec: PSpecification[T], generics: Set[String]): PSpecification[T] = {
-//    PSpecification(
-//      spec.k,
-//      processParametersExp(spec.e, generics)
-//      )(spec.pos)
-//  }
+  def processParametersIf(ii: PIf, generics: Set[String]): PIf = {
+
+    val updatedExp = ii.cond.update(processParametersExp(ii.cond.inner, generics))
+    val updatedThn = processParametersSeqn(ii.thn, generics)
+    val updatedCont = ii.els.map(c => processIfContinuation(c, generics))
+    PIf(ii.keyword, updatedExp, updatedThn, updatedCont)(ii.pos)
+  }
+
+  def processIfContinuation(cont: PIfContinuation, generics: Set[String]): PIfContinuation = {
+    cont match {
+      case i: PIf => processParametersIf(i, generics)
+      case i: PElse => processParametersElse(i, generics)
+    }
+  }
+
+  def processInvsSpecs(v: PSpecs[PKw.InvSpec] , generics: Set[String]): PSpecs[PKw.InvSpec] = {
+    val updatedSpecs = v.specs.update(v.specs.toSeq.map(v => processInvsSpec(v, generics)))
+    PSpecs[PKw.InvSpec](updatedSpecs)(v.pos)
+  }
+
+
+  def processInvsSpec(v: PSpecification[PKw.InvSpec] , generics: Set[String]): PSpecification[PKw.InvSpec] = {
+    val updatedExp = processParametersExp(v.e, generics)
+    PSpecification[PKw.InvSpec](v.k, updatedExp)(v.pos)
+  }
+
+  def processParametersStmt(stmt: PStmt, generics: Set[String]): PStmt = {
+    stmt match {
+      case continuation: PIfContinuation => processIfContinuation(continuation, generics)
+      case p@PAnnotatedStmt(annotation, s) => {
+        val updatedStmt = processParametersStmt(s, generics)
+        PAnnotatedStmt(annotation, updatedStmt)(p.pos)
+      }
+      case p@PApplyWand(apply, e) => {
+        val updatedExp = processParametersExp(e, generics)
+        PApplyWand(apply, updatedExp)(p.pos)
+      }
+      case p@PAssert(assert, e) => {
+        val updatedExp = processParametersExp(e, generics)
+        PAssert(assert, updatedExp)(p.pos)
+      }
+      case p@PAssign(targets, op, rhs) => {
+        val updatedRhs = processParametersExp(rhs, generics)
+        // TODO CFG: update the targets of the assignment
+        PAssign(targets, op, updatedRhs)(p.pos)
+      }
+      case p@PAssume(assume, e) => {
+        val updatedExp = processParametersExp(e, generics)
+        PAssume(assume, updatedExp)(p.pos)
+      }
+      case p@PDefine(annotations, define, idndef, parameters, inner) => {
+
+        val updatedBody: PDefineBody = inner.seqnOrExp match {
+          case exp: PExp => processParametersExp(exp, generics)
+          case seq: PSeqn => processParametersSeqn(seq, generics)
+          case e => {
+            throw new IllegalArgumentException(s"Unknown expression to process generic parameters! ${e.pretty}")
+          }
+        }
+        val updatedInner: PDefineInner = PDefineInner(updatedBody)
+        PDefine(annotations, define, idndef, parameters, inner)(p.pos)
+      }
+      case p@PExhale(exhale, e) => {
+        val updatedExp = processParametersExp(e, generics)
+        PExhale(exhale, updatedExp)(p.pos)
+      }
+      case p@PFold(fold, e) => {
+        val updatedExp = processParametersExp(e, generics)
+        PFold(fold, updatedExp)(p.pos)
+      }
+      case p@PGoto(goto, target) => {
+        PGoto(goto, target)(p.pos)
+      }
+      case p@PInhale(inhale, e) => {
+        val updatedExp = processParametersExp(e, generics)
+        PInhale(inhale, updatedExp)(p.pos)
+      }
+      case p@PLabel(label, idndef, invs) => {
+        val updatedInvsSpec = invs.update(invs.toSeq.map(v => processInvsSpec(v, generics)))
+        PLabel(label, idndef, updatedInvsSpec)(p.pos)
+      }
+      case p@PMacroSeqn(ss) => {
+        val updatedSeq = ss.update(ss.inner.toSeq.map(s => processParametersStmt(s, generics)))
+        PMacroSeqn(updatedSeq)(p.pos)
+      }
+      case p@PPackageWand(pckg, e, proofScript) => {
+        val updatedExp = processParametersExp(e, generics)
+        val updatedProofScript = proofScript.map(v => processParametersSeqn(v, generics))
+        PPackageWand(pckg, updatedExp, updatedProofScript)(p.pos)
+      }
+      case p@PQuasihavoc(quasihavoc, lhs, e) => {
+        val updatedLhs = lhs.map(a => (processParametersExp(a._1, generics), a._2))
+        val updatedExp = processParametersExp(e, generics)
+        PQuasihavoc(quasihavoc, updatedLhs, updatedExp)(p.pos)
+      }
+      case p@PQuasihavocall(quasihavocall, vars, colons, lhs, e) => {
+        val updatedLhs = lhs.map(a => (processParametersExp(a._1, generics), a._2))
+        val updatedExp = processParametersExp(e, generics)
+        PQuasihavocall(quasihavocall, vars, colons, updatedLhs, updatedExp)(p.pos)
+      }
+      case p@PRefute(refute, e) => {
+        val updatedExp = processParametersExp(e, generics)
+        PRefute(refute, updatedExp)(p.pos)
+      }
+      case p: PSeqn => processParametersSeqn(p, generics)
+      case p@PSkip() => {
+        PSkip()(p.pos)
+      }
+      case p@PUnfold(unfold, e) => {
+        val updatedExp = processParametersExp(e, generics)
+        PUnfold(unfold, updatedExp)(p.pos)
+      }
+      case p@PUnreachable(kw) => {
+        PUnreachable(kw)(p.pos)
+      }
+      case p@PVars(keyword, vars, init) => {
+        val updatedInit = init.map(a => (a._1, processParametersExp(a._2, generics)))
+        PVars(keyword, vars, updatedInit)(p.pos)
+      }
+      case p@PWhile(keyword, cond, invs, body) => {
+        val updatedCond = cond.update(processParametersExp(cond.inner, generics))
+        val updatedInvs = processInvsSpecs(invs, generics)
+        val updatedBody = processParametersSeqn(body, generics)
+        PWhile(keyword, updatedCond, updatedInvs, updatedBody)(p.pos)
+      }
+      case e => {
+        throw new IllegalArgumentException(s"Unknown statement to process generic parameters! ${e.pretty}")
+      }
+    }
+  }
+
+  def processParametersSeqn(seq: PSeqn, generics: Set[String]): PSeqn = {
+    PSeqn(seq.ss.update(seq.ss.inner.toSeq.map(v => processParametersStmt(v, generics))))(seq.pos)
+  }
+
+  def processParametersMethodBody(body: PSeqn, generics: Set[String]): PSeqn = {
+    PSeqn(
+      body.ss.update(body.ss.inner.toSeq.map(f => processParametersStmt(f, generics)))
+    )(body.pos)
+  }
 
   def processParametersFormalReturnDecl(mr: PFormalReturnDecl, generics: Set[String]): PFormalReturnDecl = {
     PFormalReturnDecl(
@@ -1166,6 +1442,66 @@ trait PCallLike extends POpApp {
 
   def callArgs: PDelimited.Comma[PSym.Paren, PExp]
 }
+
+// Option[PGrouped[PSym.Bracket,PDelimited[(PReserved[PSym.Comma.type], PType),PReserved[PSym.Comma.type]]]]
+case class PPredCall(idnref: PIdnRef[PCallable], params: Option[PGrouped[PSym.Bracket, PDelimited[PType, PReserved[PSym.Comma.type]]]], callArgs: PDelimited.Comma[PSym.Paren, PExp])(val pos: (Position, Position))
+  extends PCallLike with PLocationAccess with PAccAssertion with PAssignTarget {
+  override def loc = this
+
+  override def perm = PFullPerm.implied()
+
+  override def signatures: List[PTypeSubstitution] = (funcDecl match {
+    case Some(pf: PFunction) if pf.formalArgs.size == args.size => List(
+      (args.indices.map(i => POpApp.pArgS(i) -> pf.formalArgs(i).typ) :+ (POpApp.pResS -> pf.typ.resultType)).toMap
+    )
+    case Some(pdf: PDomainFunction) if pdf.formalArgs.size == args.size && domainTypeRenaming.isDefined => List(
+      (args.indices.map(i => POpApp.pArgS(i) -> pdf.formalArgs(i).typ.substitute(domainTypeRenaming.get)) :+
+        (POpApp.pResS -> pdf.typ.resultType.substitute(domainTypeRenaming.get))).toMap
+    )
+    case Some(pp: PPredicate) if pp.formalArgs.size == args.size => List(
+      (args.indices.map(i => POpApp.pArgS(i) -> pp.formalArgs(i).typ) :+ (POpApp.pResS -> pp.resultType)).toMap
+    )
+    // this case is handled in Resolver.scala (- method check) which generates the appropriate error message
+    case _ => Nil
+  })
+
+  def funcDecl: Option[PAnyFunction] = idnref.decl.filter(_.isInstanceOf[PAnyFunction]).map(_.asInstanceOf[PAnyFunction])
+
+  def methodDecl: Option[PMethod] = idnref.decl.filter(_.isInstanceOf[PMethod]).map(_.asInstanceOf[PMethod])
+  // def formalArgs: Option[Seq[PFormalArgDecl]] = decl.map(_.formalArgs)
+
+  override def extraLocalTypeVariables = _extraLocalTypeVariables
+
+  var _extraLocalTypeVariables: Set[PDomainType] = Set()
+  var domainTypeRenaming: Option[PTypeRenaming] = None
+
+  def isDomainFunction = domainTypeRenaming.isDefined
+
+  def isPredicate = funcDecl.map(_.isInstanceOf[PPredicate]).getOrElse(false)
+
+  def isMethod = methodDecl.isDefined
+
+  var domainSubstitution: Option[PTypeSubstitution] = None
+
+  override def forceSubstitution(ots: PTypeSubstitution) = {
+
+    val ts = domainTypeRenaming match {
+      case Some(dtr) =>
+        val s3 = PTypeSubstitution(dtr.mm.map(kv => kv._1 -> (ots.get(kv._2) match {
+          case Some(pt) => pt
+          case None => PTypeSubstitution.defaultType
+        })))
+        assert(s3.m.keySet == dtr.mm.keySet)
+        assert(s3.m.forall(_._2.isGround))
+        domainSubstitution = Some(s3)
+        dtr.mm.values.foldLeft(ots)(
+          (tss, s) => if (tss.contains(s)) tss else tss.add(s, PTypeSubstitution.defaultType).getOrElse(null))
+      case _ => ots
+    }
+    super.forceSubstitution(ts)
+  }
+}
+
 
 case class PCall(idnref: PIdnRef[PCallable], callArgs: PDelimited.Comma[PSym.Paren, PExp], typeAnnotated: Option[(PSym.Colon, PType)])(val pos: (Position, Position))
   extends PCallLike with PLocationAccess with PAccAssertion with PAssignTarget {
@@ -2203,7 +2539,7 @@ case class PFunction(annotations: Seq[PAnnotation], keyword: PKw.Function, idnde
                     (val pos: (Position, Position)) extends PSingleMember with PAnyFunction with PGlobalCallableNamedArgs {
 }
 
-case class PPredicate(annotations: Seq[PAnnotation], keyword: PKw.Predicate, idndef: PIdnDef, args: PDelimited.Comma[PSym.Paren, PFormalArgDecl], body: Option[PBracedExp])(val pos: (Position, Position))
+case class PPredicate(annotations: Seq[PAnnotation], keyword: PKw.Predicate, idndef: PIdnDef, typVars: Option[PDelimited.Comma[PSym.Bracket, PTypeVarDecl]], args: PDelimited.Comma[PSym.Paren, PFormalArgDecl], body: Option[PBracedExp])(val pos: (Position, Position))
   extends PSingleMember with PNoSpecsFunction with PGlobalCallableNamedArgs {
   override def c = PReserved.implied(PSym.Colon)
 

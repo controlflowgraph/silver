@@ -617,7 +617,12 @@ class FastParser {
       case _ => Fail
     })
 
-  def predAcc[$: P]: P[PCall] = funcApp
+  def predicateApp[$: P]: P[PPredCall] = P(idnref[$, PCallable] ~~~ typeList(typ).lw.? ~~ argList(exp)).map {
+    case (func, tv, args) =>
+      PPredCall(func, tv, args)(_)
+  }.pos
+
+  def predAcc[$: P]: P[PPredCall] = predicateApp
 
   def perm[$: P]: P[PKwOp.Perm => Pos => PCurPerm] = P(resAcc.parens map { r => PCurPerm(_, r) })
 
@@ -1000,9 +1005,9 @@ class FastParser {
 
   def postcondition(implicit ctx : P[_]) : P[PSpecification[PKw.PostSpec]] = P((P(PKw.Ensures) ~ exp).map((PSpecification.apply _).tupled).pos | ParserExtension.postSpecification(ctx))
 
-  def predicateDecl[$: P]: P[PKw.Predicate => PAnnotationsPosition => PPredicate] = P(idndef ~ argList(formalArg) ~~~ bracedExp.lw.?).map {
-    case (idn, args, c) => k =>
-      ap: PAnnotationsPosition => PPredicate(ap.annotations, k, idn, args, c)(ap.pos)
+  def predicateDecl[$: P]: P[PKw.Predicate => PAnnotationsPosition => PPredicate] = P(idndef ~~~ typeList(domainTypeVarDecl).lw.? ~ argList(formalArg) ~~~ bracedExp.lw.?).map {
+    case (idn, tv, args, c) => k =>
+      ap: PAnnotationsPosition => GenericParameterInstantiationHelper.processParametersPredicate(PPredicate(ap.annotations, k, idn, tv, args, c)(ap.pos), tv.map(v => v.inner.toSeq.map(_.idndef.name)).getOrElse(Nil).toSet)
   }
 
   def methodDecl[$: P]: P[PKw.Method => PAnnotationsPosition => PMethod] =

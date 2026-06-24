@@ -114,7 +114,7 @@ case class Translator(program: PProgram) {
   }
 
   private def translate(p: PPredicate): Predicate = p match {
-    case PPredicate(_, _, idndef, _, body) =>
+    case PPredicate(_, _, idndef, _, _, body) =>
       val p = findPredicate(idndef)
       val pp = p.copy(body = body map (_.e.inner) map exp)(p.pos, p.info, p.errT)
       members(p.name) = pp

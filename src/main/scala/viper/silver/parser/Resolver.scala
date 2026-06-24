@@ -75,6 +75,7 @@ case class TypeChecker(program: PProgram, names: NameAnalyser) {
   }
 
   def check(p: PProgram): Unit = {
+    println(p)
 
     /* [2022-03-14 Alessandro] Domain function declarations, method declarations and ordinary function declarations
      * must be checked before their application is checked. Especially, this is because type variables in signatures
@@ -193,6 +194,8 @@ case class TypeChecker(program: PProgram, names: NameAnalyser) {
 
   def checkDeclaration(p: PPredicate): Unit = {
     checkMember(p) {
+
+
       p.formalArgs foreach (a => check(a.typ))
     }
   }
@@ -1009,8 +1012,16 @@ case class TypeChecker(program: PProgram, names: NameAnalyser) {
               case acc: PAccPred =>
                 acc.loc match {
                   case _: PFieldAccess =>
-                  case pc: PCall if pc.isPredicate =>
+                  case pc: PCall if pc.isPredicate => {
+                    println(s"Call: ${pc}")
+                  }
+                  case pc: PPredCall if pc.isPredicate => {
+                    println(s"PredCall: ${pc}")
+                    println(s"tv -> ${pc.params.map(v => v.inner.toSeq).getOrElse(Nil)}")
+                    println(s"args -> ${pc.callArgs.inner.toSeq}")
+                  }
                   case loc =>
+                    println(acc.loc.pretty)
                     issueError(loc, "specified location is not a field nor a predicate")
                 }
                 acc.permExp match {
@@ -1052,17 +1063,28 @@ case class TypeChecker(program: PProgram, names: NameAnalyser) {
             else poa.signatures map (ts => refreshWith(ts, ltr))) //local substitutions refreshed)
             val rrt: PDomainType = POpApp.pRes.substitute(ltr).asInstanceOf[PDomainType] // return type (which is a dummy type variable) replaced with fresh type
 
+            def isTypeVar(t: PType): Boolean = {
+              t match {
+                case d: PDomainType => d.kind == PDomainTypeKinds.TypeVar
+                case _ => false
+              }
+            }
+
             poa match {
               case exp: PBinExp => {
                 // special case for comparing a datatype to null which is ambiguous with the ref type
-                val leftIsDT = getDatatypeByName(exp.left.typ).isDefined
-                val rightIsDT = getDatatypeByName(exp.right.typ).isDefined
+                val leftIsDT = getDatatypeByName(exp.left.typ).isDefined || isTypeVar(exp.left.typ)
+                val rightIsDT = getDatatypeByName(exp.right.typ).isDefined || isTypeVar(exp.right.typ)
+                println(s"LR TYP: ${exp.left.typ}    ${exp.right.typ}")
                 if (exp.op.rs == EqEq || exp.op.rs == Ne) {
+                  println(s"checking if left right is null: ${poa.pretty}")
                   if (leftIsDT && exp.right.isInstanceOf[PNullLit]) {
+                    println("LEFT IS DT")
                     exp.right.typ = exp.left.typ
                   }
 
                   if (rightIsDT && exp.left.isInstanceOf[PNullLit]) {
+                    println("RIGHT IS DT")
                     exp.left.typ = exp.right.typ
                   }
                 }
@@ -1081,7 +1103,7 @@ case class TypeChecker(program: PProgram, names: NameAnalyser) {
               val unifiedSequence = unifySequenceWithSubstitutions(rlts, argData)
               if (unifiedSequence.isLeft && poa.typeSubstitutions.isEmpty) {
                 val problem = unifiedSequence.left.toOption.get
-                messages ++= FastMessaging.message(problem._3, s"found incompatible type `${problem._1.pretty}`, expected `${problem._2.pretty}`")
+                messages ++= FastMessaging.message(problem._3, s"456 found incompatible type `${problem._1.pretty}`, expected `${problem._2.pretty}   ${poa.pretty}`")
               } else {
                 poa.typeSubstitutions ++= unifiedSequence.toOption.get
                 val ts = poa.typeSubsDistinct
