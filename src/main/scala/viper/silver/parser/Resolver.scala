@@ -10,12 +10,14 @@ import viper.silver.FastMessaging
 import viper.silver.parser.PKw.Requires
 import viper.silver.parser.PSymOp.{EqEq, Ne}
 import viper.silver.plugin.standard.adt.PAdtOpApp
+import viper.silver.plugin.standard.predicateinstance.PPredicateInstanceKeyword
 
+import scala.collection.IterableOnce.iterableOnceExtensionMethods
 import scala.collection.mutable
 
 /**
-  * A resolver and type-checker for the intermediate Viper AST.
-  */
+ * A resolver and type-checker for the intermediate Viper AST.
+ */
 case class Resolver(p: PProgram) {
   val names = NameAnalyser()
   val typechecker = TypeChecker(p, names)
@@ -47,8 +49,8 @@ case class Resolver(p: PProgram) {
 }
 
 /**
-  * Performs type-checking and sets the type of all typed nodes.
-  */
+ * Performs type-checking and sets the type of all typed nodes.
+ */
 case class TypeChecker(program: PProgram, names: NameAnalyser) {
 
   def this(names: NameAnalyser) = {
@@ -65,6 +67,7 @@ case class TypeChecker(program: PProgram, names: NameAnalyser) {
 
   /** to record error messages */
   var messages: FastMessaging.Messages = Nil
+
   def success: Boolean = messages.isEmpty || messages.forall(m => !m.error)
 
   def run(p: PProgram, warnAboutFunctionPermAmounts: Boolean): Boolean = {
@@ -113,11 +116,9 @@ case class TypeChecker(program: PProgram, names: NameAnalyser) {
   def checkUniqueness[T](elems: Seq[T], loc: PNode, ctx: String, form: T => String): Unit = {
     var duplicate: Set[T] = Set()
     var current: Seq[T] = elems
-    while(current != Nil)
-    {
+    while (current != Nil) {
 
-      if(current.tail.contains(current.head))
-      {
+      if (current.tail.contains(current.head)) {
         duplicate = duplicate.union(Set(current.head))
       }
       current = current.tail
@@ -141,6 +142,7 @@ case class TypeChecker(program: PProgram, names: NameAnalyser) {
 
   def checkDeclaration(m: PMethod): Unit = {
     checkMember(m) {
+      // TODO CFG: check that all generic parameters are defined in the arguments and return type
       (m.formalArgs ++ m.formalReturns) foreach (a => check(a.typ))
     }
   }
@@ -350,6 +352,133 @@ case class TypeChecker(program: PProgram, names: NameAnalyser) {
         }
       case call: PCall => sys.error(s"Unexpected node $call found")
     }
+
+    def mergeUnificationResults(u1: Map[String, PType], u2: Map[String, PType]): Option[Map[String, PType]] = {
+      // merging the two instantiation maps by checking the overlapping assignments for equality
+      // and then merging the kv pairs of both maps
+      u2.keys.foldLeft[Option[Map[String, PType]]](Some(u1))((acc, k) =>
+        acc match {
+          case Some(m) => m.get(k) match {
+            case Some(typ) =>
+              if (u2(k).equals(typ)) {
+                acc
+              } else {
+                None
+              }
+            case None => {
+              val kv: (String, PType) = (k, u2(k))
+              val extended: Map[String, PType] = m + kv
+              Some(extended)
+            }
+          }
+          case None => None
+        })
+    }
+
+    def findUnificationForPair(call: PNode, arg: PType, value: PType): Option[Map[String, PType]] = {
+      (arg, value) match {
+        case (PUnknown(), PUnknown()) => Some(Map())
+        case (PBoolImpureType(), PBoolImpureType()) => Some(Map())
+        case (PBoolWandType(), PBoolWandType()) => Some(Map())
+        case (PBoolPredicateType(), PBoolPredicateType()) => Some(Map())
+        case (PFunctionType(a1, r1), PFunctionType(a2, r2)) => {
+          val mappedArgs1 = a1 ++ Seq(r1)
+          val mappedArgs2 = a2 ++ Seq(r2)
+          if (mappedArgs1.length == mappedArgs2.length) {
+            mappedArgs1.zip(mappedArgs2)
+              .map(v => findUnificationForPair(call, v._1, v._2))
+              .foldLeft[Option[Map[String, PType]]](Some(Map()))((acc, v) => (acc, v) match {
+                case (Some(m1), Some(m2)) => mergeUnificationResults(m1, m2)
+                case _ => None
+              })
+          }
+          else {
+            None
+          }
+        }
+        case (PMacroType(u1), PMacroType(u2)) => if (u1.idnref.equals(u2.idnref)) {
+          Some(Map())
+        } else {
+          None
+        }
+        case (PMapType(_, t1), PMapType(_, t2)) =>
+          val res1 = findUnificationForPair(call, t1.inner.first, t2.inner.first)
+          val res2 = findUnificationForPair(call, t1.inner.second, t2.inner.second)
+          (res1, res2) match {
+            case (Some(v1), Some(v2)) => mergeUnificationResults(v1, v2)
+            case _ => None
+          }
+        case (PMultisetType(_, elem1), PMultisetType(_, elem2)) => findUnificationForPair(call, elem1.inner, elem2.inner)
+        case (PPrimitiv(n1), PPrimitiv(n2)) => if (n1.rs.equals(n2.rs)) {
+          Some(Map())
+        } else {
+          None
+        }
+        case (PSeqType(_, elem1), PSeqType(_, elem2)) => findUnificationForPair(call, elem1.inner, elem2.inner)
+        case (PSetType(_, elem1), PSetType(_, elem2)) => findUnificationForPair(call, elem1.inner, elem2.inner)
+        // TODO: add case for generic parameter and every other type
+        case (d1@PDomainType(dom1, _), d2) if d1.kind == PDomainTypeKinds.TypeVar =>
+          // TODO: set the substitution
+          Some(Seq((dom1.name, d2)).toMap)
+        case (d1@PDomainType(dom1, args1), d2@PDomainType(dom2, args2)) =>
+          val mappedArgs1 = args1.map(_.inner.toSeq).getOrElse(Nil)
+          val mappedArgs2 = args2.map(_.inner.toSeq).getOrElse(Nil)
+          if (d1.kind == d2.kind && dom1.name.equals(dom2.name) && mappedArgs1.length == mappedArgs2.length) {
+            mappedArgs1.zip(mappedArgs2)
+              .map(v => findUnificationForPair(call, v._1, v._2))
+              .foldLeft[Option[Map[String, PType]]](Some(Map()))((acc, v) => (acc, v) match {
+                case (Some(m1), Some(m2)) => mergeUnificationResults(m1, m2)
+                case _ => None
+              })
+          }
+          else {
+            None
+          }
+        case _ => {
+          messages ++= FastMessaging.message(call, s"failed unification of `${arg}` and `${value}`")
+          None
+        }
+      }
+    }
+
+    def findUnificationForArgs(call: PNode, argPairs: Seq[(PType, PType)]): Option[Map[String, PType]] = {
+      val result = argPairs.map(p => (p, findUnificationForPair(call, p._1, p._2)))
+        .foldLeft((false, Map[String, PType]()))((res, rr) => {
+          val m2 = rr._2
+          val failed = res._1
+          val currentMapping = res._2
+          m2 match {
+            case Some(value) =>
+              value.keys.foldLeft((failed, currentMapping))((acc, k) => {
+                acc._2.get(k) match {
+                  case Some(typ) =>
+                    if (value(k).equals(typ)) {
+                      (acc._1, acc._2)
+                    }
+                    else {
+                      messages ++= FastMessaging.message(call, s"incompatible generic parameter instantiations `$typ` and `${value(k)}` (originating from: `${rr._1._1}` and `${rr._1._2}`)")
+                      (true, acc._2)
+                    }
+                  case None => {
+                    val kv: (String, PType) = (k, value(k))
+                    val extended: Map[String, PType] = acc._2 + kv
+                    (acc._1, extended)
+                  }
+                }
+              })
+            case None => {
+              (true, currentMapping)
+            }
+          }
+        })
+      if (result._1) {
+        None
+      }
+      else {
+        Some(result._2)
+      }
+    }
+
     // Check rhs
     stmt match {
       case PAssign(targets, _, c@PCall(func, _, _)) if targets.length != 1 || func.decls.forall(!_.isInstanceOf[PAnyFunction]) =>
@@ -363,12 +492,25 @@ case class TypeChecker(program: PProgram, names: NameAnalyser) {
           messages ++= FastMessaging.message(stmt, "ambiguous method call")
         else {
           val m = func.decl.get.asInstanceOf[PMethod]
-          val formalArgs = m.formalArgs
           val formalTargets = m.formalReturns
+          val formalArgs = m.formalArgs
+          println(s"instantiation: ${c.args} -> ${formalArgs}")
+          c.args.foreach(a => {
+            checkTopTyped(a, None)
+          })
           formalArgs.foreach(fa => check(fa.typ))
-          for ((formal, actual) <- (formalArgs zip c.args) ++ (formalTargets zip targets.toSeq)) {
-            check(actual, formal.typ)
+          val unificationResult = findUnificationForArgs(c, formalArgs.map(f => f.typ) zip c.args.map(e => e.typ))
+          unificationResult match {
+            case Some(r) => {
+              val ts = PTypeSubstitution(r)
+              for ((formal, actual) <- (formalTargets zip targets.toSeq)) {
+                check(actual, formal.typ.substitute(ts))
+              }
+            }
+            case None =>
+              messages ++= FastMessaging.message(c, s"unable to unify arguments of method call `${c.pretty}`")
           }
+          // TODO CFG: record the instantiation of the method
         }
       case PAssign(targets, _, PNewExp(_, fields)) if targets.length == 1 =>
         check(targets.head, Ref)
@@ -672,8 +814,7 @@ case class TypeChecker(program: PProgram, names: NameAnalyser) {
         error = oexpected.isDefined && !isSubtype(exp.typ, oexpected.get)
       }
       // special logic to resolve ambiguity of null literal and expected DT type
-      if(oexpected.isDefined && exp.isInstanceOf[PNullLit] && getDatatypeByName(oexpected.get).isDefined)
-      {
+      if (oexpected.isDefined && exp.isInstanceOf[PNullLit] && getDatatypeByName(oexpected.get).isDefined) {
         exp.typ = oexpected.get
         error = false
       }
@@ -685,7 +826,7 @@ case class TypeChecker(program: PProgram, names: NameAnalyser) {
           } else {
             exp.typ.substitute(selectAndGroundTypeSubstitution(exp, exp.typeSubstitutions))
           }
-          messages ++= FastMessaging.message(exp, s"123 found incompatible type `${reportedActual.pretty}`, expected `${expected.pretty}`")
+          messages ++= FastMessaging.message(exp, s"123 found incompatible type `${reportedActual.pretty}`, expected `${expected.toString()}`")
         case None =>
           typeError(exp)
       }
@@ -694,34 +835,34 @@ case class TypeChecker(program: PProgram, names: NameAnalyser) {
 
   def checkInternal(exp: PExp): Unit = {
     /**
-      * Set the type of 'exp', and check that the actual type is allowed by one of the expected types.
-      */
+     * Set the type of 'exp', and check that the actual type is allowed by one of the expected types.
+     */
     def setType(actual: PType): Unit = {
       exp.typ = actual
     }
 
     /**
-      * Issue an error for the node at 'n'. Also sets an error type for 'exp' to suppress
-      * further warnings.
-      *
-      * TODO: Similar to Consistency.recordIfNot. Combine!
-      */
+     * Issue an error for the node at 'n'. Also sets an error type for 'exp' to suppress
+     * further warnings.
+     *
+     * TODO: Similar to Consistency.recordIfNot. Combine!
+     */
     def issueError(n: PNode, m: String): Unit = {
       messages ++= FastMessaging.message(n, m)
       setErrorType() // suppress further warnings
     }
 
     /**
-      * Sets an error type for 'exp' to suppress further warnings.
-      */
+     * Sets an error type for 'exp' to suppress further warnings.
+     */
     def setErrorType(): Unit = {
       setType(PUnknown())
     }
 
     /**
-      * Checks if a given expression contains a permission amount that is more specific than stating whether an amount
-      * is zero or positive.
-      */
+     * Checks if a given expression contains a permission amount that is more specific than stating whether an amount
+     * is zero or positive.
+     */
     def hasSpecificPermAmounts(e: PExp): Boolean = e match {
       case PCondExp(_, _, thn, _, els) => hasSpecificPermAmounts(thn) || hasSpecificPermAmounts(els)
       case _: PWildcard => false
@@ -761,7 +902,7 @@ case class TypeChecker(program: PProgram, names: NameAnalyser) {
       case PAnnotatedExp(_, e) =>
         checkInternal(e)
         setType(e.typ)
-      case psl: PSimpleLiteral=>
+      case psl: PSimpleLiteral =>
         psl match {
           case r@PResultLit(_) =>
             if (resultAllowed)
@@ -901,7 +1042,7 @@ case class TypeChecker(program: PProgram, names: NameAnalyser) {
 
           if ((poa.signatures.nonEmpty || isSpecialLookup) && poa.args.forall(_.typeSubstitutions.nonEmpty) && !nestedTypeError) {
             val ltr = getFreshTypeSubstitution(poa.localScope.toList) //local type renaming - fresh versions
-            val rlts = (if(isSpecialLookup)
+            val rlts = (if (isSpecialLookup)
               poa match {
                 case PFieldAccess(rcv, _, field) => {
                   val signatureList = List(
@@ -918,14 +1059,12 @@ case class TypeChecker(program: PProgram, names: NameAnalyser) {
                 // special case for comparing a datatype to null which is ambiguous with the ref type
                 val leftIsDT = getDatatypeByName(exp.left.typ).isDefined
                 val rightIsDT = getDatatypeByName(exp.right.typ).isDefined
-                if(exp.op.rs == EqEq || exp.op.rs == Ne) {
-                  if(leftIsDT && exp.right.isInstanceOf[PNullLit])
-                  {
+                if (exp.op.rs == EqEq || exp.op.rs == Ne) {
+                  if (leftIsDT && exp.right.isInstanceOf[PNullLit]) {
                     exp.right.typ = exp.left.typ
                   }
 
-                  if(rightIsDT && exp.left.isInstanceOf[PNullLit])
-                  {
+                  if (rightIsDT && exp.left.isInstanceOf[PNullLit]) {
                     exp.left.typ = exp.right.typ
                   }
                 }
@@ -1024,20 +1163,20 @@ case class TypeChecker(program: PProgram, names: NameAnalyser) {
     messages ++= FastMessaging.message(e, message))
 
   /**
-    * If b is false, report an error for node.
-    */
+   * If b is false, report an error for node.
+   */
   def ensure(b: Boolean, node: PNode, msg: String): Unit = {
     if (!b) messages ++= FastMessaging.message(node, msg)
   }
 }
 
 case class DeclarationMap(
-  decls: mutable.HashMap[String, mutable.Buffer[PDeclaration]] = mutable.HashMap.empty,
-  unique: mutable.HashMap[String, (Boolean, PDeclaration)] = mutable.HashMap.empty,
-  refs: mutable.HashMap[String, mutable.Buffer[PIdnUseName[_]]] = mutable.HashMap.empty,
-  isMember: Boolean,
-  isGlobal: Boolean = false,
-) {
+                           decls: mutable.HashMap[String, mutable.Buffer[PDeclaration]] = mutable.HashMap.empty,
+                           unique: mutable.HashMap[String, (Boolean, PDeclaration)] = mutable.HashMap.empty,
+                           refs: mutable.HashMap[String, mutable.Buffer[PIdnUseName[_]]] = mutable.HashMap.empty,
+                           isMember: Boolean,
+                           isGlobal: Boolean = false,
+                         ) {
   def checkUnique(decl: PDeclaration, canUnique: Boolean): Option[PDeclaration] = {
     val name = decl.idndef.name
     val uniq = unique.get(name)
@@ -1056,6 +1195,7 @@ case class DeclarationMap(
     }
     uniq.map(_._2)
   }
+
   def newDecl(decl: PDeclaration) = {
     val name = decl.idndef.name
     // Backward references
@@ -1076,11 +1216,11 @@ case class DeclarationMap(
         .foreach(_.prependDecls(ds.toSeq))
     }
     // Save inner decls and add them to outer refs
-    map.decls.values.foreach(_.foreach(d => 
-        if (!d.isInstanceOf[PLocalDeclaration] &&
-          !(d.isInstanceOf[PMemberDeclaration] && map.isMember) &&
-          !(d.isInstanceOf[PGlobalDeclaration] && map.isGlobal)
-        ) newDecl(d)
+    map.decls.values.foreach(_.foreach(d =>
+      if (!d.isInstanceOf[PLocalDeclaration] &&
+        !(d.isInstanceOf[PMemberDeclaration] && map.isMember) &&
+        !(d.isInstanceOf[PGlobalDeclaration] && map.isGlobal)
+      ) newDecl(d)
     ))
     // Save inner refs
     map.refs.foreach { case (k, rs) => refs.getOrElseUpdate(k, mutable.Buffer.empty) ++= rs }
@@ -1089,7 +1229,8 @@ case class DeclarationMap(
     map.unique.values.flatMap { case (inScope, d) => {
       val canUnique = (d.isInstanceOf[PGlobalUniqueDeclaration] && !map.isGlobal) || (d.isInstanceOf[PMemberUniqueDeclaration] && !map.isMember)
       checkUnique(d, inScope && canUnique).map((d, _))
-    }}.toSeq
+    }
+    }.toSeq
   }
 
   def newRef(idnuse: PIdnUseName[_]) = {
@@ -1108,33 +1249,34 @@ case class DeclarationMap(
 }
 
 /**
-  * Resolves identifiers to their declaration. The important traits that relate to this are:
-  * - `PDeclaration` marks a declaration of an identifier.
-  * - `PIdnUseName` marks a use of an identifier (should be resolved).
-  * 
-  * - `PScope` marks a scope.
-  * - `PMember <: PScope` marks a member scope.
-  * - `PLocalDeclaration`: a declaration that is visible within the containing scope.
-  * - `PMemberDeclaration`: a declaration that is visible within the containing member.
-  * - `PGlobalDeclaration`: a declaration that is visible within the program.
-  * 
-  * - `PBackwardDeclaration`: a declaration that can be referenced before it is declared.
-  * - `POverridesDeclaration`: a declaration that overrides any other previously seen declarations.
-  * 
-  * - `PScopeUniqueDeclaration`: marks a declaration as unique within the scope.
-  * - `PMemberUniqueDeclaration`: marks a declaration as unique within the member.
-  * - `PGlobalUniqueDeclaration`: marks a declaration as unique within the program.
-  * 
-  * - `PNameAnalyserOpaque` marks a scope as opaque (should not be traversed by the name analyser).
-  */
+ * Resolves identifiers to their declaration. The important traits that relate to this are:
+ * - `PDeclaration` marks a declaration of an identifier.
+ * - `PIdnUseName` marks a use of an identifier (should be resolved).
+ *
+ * - `PScope` marks a scope.
+ * - `PMember <: PScope` marks a member scope.
+ * - `PLocalDeclaration`: a declaration that is visible within the containing scope.
+ * - `PMemberDeclaration`: a declaration that is visible within the containing member.
+ * - `PGlobalDeclaration`: a declaration that is visible within the program.
+ *
+ * - `PBackwardDeclaration`: a declaration that can be referenced before it is declared.
+ * - `POverridesDeclaration`: a declaration that overrides any other previously seen declarations.
+ *
+ * - `PScopeUniqueDeclaration`: marks a declaration as unique within the scope.
+ * - `PMemberUniqueDeclaration`: marks a declaration as unique within the member.
+ * - `PGlobalUniqueDeclaration`: marks a declaration as unique within the program.
+ *
+ * - `PNameAnalyserOpaque` marks a scope as opaque (should not be traversed by the name analyser).
+ */
 case class NameAnalyser() {
 
   /** To record error messages */
   var messages: FastMessaging.Messages = Nil
+
   def success: Boolean = messages.isEmpty || messages.forall(m => !m.error)
 
   /** Resolves the global declaration to which the given identifier `name` refers.
-    */
+   */
   def globalDefinitions(name: String): Seq[PDeclaration] = {
     globalDeclarationMap.decls.getOrElse(name, Nil).toSeq
   }
@@ -1144,6 +1286,7 @@ case class NameAnalyser() {
     localDeclarationMaps.clear()
     namesInScope.clear()
   }
+
   private val globalDeclarationMap = DeclarationMap(isMember = false, isGlobal = true)
 
   /* [2014-11-13 Malte] Changed localDeclarationMaps to be a map from PScope.Id
@@ -1160,6 +1303,7 @@ case class NameAnalyser() {
 
   def check(g: PNode, target: Option[PNode], initialCurScope: PScope = null): Unit = {
     var curScope: PScope = initialCurScope
+
     def getMap(): DeclarationMap = Option(curScope).map(_.scopeId).map(localDeclarationMaps.get(_).get).getOrElse(globalDeclarationMap)
 
     val scopeStack = mutable.Stack[PScope]()

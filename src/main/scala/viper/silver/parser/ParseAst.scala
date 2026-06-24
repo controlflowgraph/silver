@@ -479,7 +479,7 @@ case class PDomainType(domain: PIdnRef[PTypeDeclaration], args: Option[PDelimite
       return this
 
     val r = this.withTypeArguments(newArgs)
-    r.kind = PDomainTypeKinds.Domain
+    r.kind = if (kind == PDomainTypeKinds.Datatype) PDomainTypeKinds.Datatype else PDomainTypeKinds.Domain
     r
   }
 
@@ -851,10 +851,7 @@ object GenericParameterInstantiationHelper {
       case f: PFunctionType => PFunctionType(f.argTypes.map(a => processParametersType(a, generics)), processParametersType(f.resultType, generics))
       case i: PInternalType => i
       case p: PPrimitiv[_] => p
-      case _ => {
-        println(s"unknown typ ${typ}")
-        typ
-      }
+      case _ => typ
     }
   }
 }
