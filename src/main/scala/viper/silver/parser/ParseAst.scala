@@ -11,12 +11,6 @@ import viper.silver.ast.utility.Visitor
 import viper.silver.ast.utility.rewriter.{HasExtraValList, HasExtraVars, Rewritable, StrategyBuilder}
 import viper.silver.ast.{Exp, FilePosition, HasLineColumn, Member, NoPosition, Position, SourcePosition, Stmt, Type}
 import viper.silver.parser.TypeHelper._
-import viper.silver.plugin.sif.{PLowEventExp, PLowExp, PRelExp}
-import viper.silver.plugin.standard.adt.PAdtOpApp
-import viper.silver.plugin.standard.predicateinstance.PPredicateInstance
-import viper.silver.plugin.standard.refute.PRefute
-import viper.silver.plugin.standard.smoke.PUnreachable
-import viper.silver.plugin.standard.termination.{PDecreasesClause, PDecreasesStar, PDecreasesTuple, PDecreasesWildcard}
 import viper.silver.verifier.ParseReport
 
 import scala.collection.Set

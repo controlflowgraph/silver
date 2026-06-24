@@ -9,8 +9,6 @@ package viper.silver.parser
 import viper.silver.FastMessaging
 import viper.silver.parser.PKw.Requires
 import viper.silver.parser.PSymOp.{EqEq, Ne}
-import viper.silver.plugin.standard.adt.PAdtOpApp
-import viper.silver.plugin.standard.predicateinstance.PPredicateInstanceKeyword
 
 import scala.collection.IterableOnce.iterableOnceExtensionMethods
 import scala.collection.mutable
