@@ -217,6 +217,33 @@ case class Translator(program: PProgram) {
     })
   }
 
+  def translatePSeqn(seee: PSeqn) : Seqn = {
+    val pos = seee
+    val (s, annotations) = extractAnnotationFromStmt(seee)
+    val sourcePNodeInfo = SourcePNodeInfo(seee)
+    val info = if (annotations.isEmpty) sourcePNodeInfo else ConsInfo(sourcePNodeInfo, AnnotationInfo(annotations))
+
+    val seqn = seee.ss.inner.toSeq
+    val plocals = seqn.collect {
+      case l: PVars => Some(l)
+      case _ => None
+    }
+    val locals = plocals.flatten.map {
+      case p@PVars(_, vars, _) => {
+        vars.toSeq.map(v => {
+          val value = ttyp(v.typ) match {
+            case _: DatatypeType => {
+              Ref
+            }
+            case e => e
+          }
+          LocalVarDecl(v.idndef.name, value)(p, SourcePNodeInfo(v))
+        })
+      }
+    }.flatten
+    Seqn(seqn filterNot (_.isInstanceOf[PSkip]) map stmt, locals)(pos, info)
+  }
+
   def translate: Option[Program] /*(Program, Seq[Messaging.Record])*/ = {
     // assert(TypeChecker.messagecount == 0, "Expected previous phases to succeed, but found error messages.") // AS: no longer sharing state with these phases
 
@@ -281,6 +308,9 @@ case class Translator(program: PProgram) {
             functions.asInstanceOf[Seq[Function]], filteredPredicates, filteredMethods,
                 (extensions filter (t => t.isInstanceOf[ExtensionMember])).asInstanceOf[Seq[ExtensionMember]])(program))
 
+    println("METHODS:")
+    filteredMethods.foreach(m => println(m.name, m.pres))
+
     finalProgram.deepCollect {
       case fp: ForPerm => Consistency.checkForPermArguments(fp, finalProgram)
       case trig: Trigger => Consistency.checkTriggers(trig, finalProgram)
@@ -298,16 +328,32 @@ case class Translator(program: PProgram) {
   }
 
   private def translate(m: PMethod): Method = m match {
-    case PMethod(_, _, idndef, _, _,  _, pres, posts, body) =>
-      val m = findMethod(idndef)
+    case PMethod(_, _, idndef, gens, args,  _, pres, posts, body) =>
+      instantiateMethodTemplate(idndef.name, args.inner.toSeq.map(_.typ))
 
-      val newBody = body.map(actualBody => stmt(actualBody).asInstanceOf[Seqn])
+//      val m = findMethod(idndef)
+//      val genericParameters = gens.map(v => v.inner.toSeq).getOrElse(Nil).map(a => a.idndef.name)
+//        .foldRight("")((a, b) => a + "$" + b)
+//
+//      val newBody = body.map(actualBody => stmt(actualBody).asInstanceOf[Seqn])
+//
+//      println(s"PRES BEFORE: ${pres}")
+//      println(s"PROCESSED PRES: ${pres.toSeq map (p => exp(p.e))}")
+//
+//      val finalMethod = m.copy(
+//        name = m.name + genericParameters,
+//        formalArgs = m.formalArgs.map(l => l.copy(typ = convertToViperType(l.typ))(l.pos, l.info, l.errT)),
+//        pres = pres.toSeq map (p => exp(p.e)),
+//        posts = posts.toSeq map (p => exp(p.e)),
+//        body = newBody)(m.pos, m.info, m.errT)
+//
+//      println(s"FINAL METHOD: ${finalMethod.pres}")
+//      println(s"FINAL METHOD: ${finalMethod}")
+//
+//      members(finalMethod.name) = finalMethod
+//      finalMethod
 
-      val finalMethod = m.copy(pres = pres.toSeq map (p => exp(p.e)), posts = posts.toSeq map (p => exp(p.e)), body = newBody)(m.pos, m.info, m.errT)
-
-      members(m.name) = finalMethod
-
-      finalMethod
+      null
   }
 
   private def translate(d: PDomain): Domain = d match {
@@ -371,6 +417,9 @@ case class Translator(program: PProgram) {
       case pp: PPredicate =>
         Predicate(name, pp.formalArgs map liftArgDecl, null)(pos, Translator.toInfo(p.annotations, pp))
       case pm: PMethod =>
+        pm.args.inner.toSeq.map(d => d.typ)
+          .map(a => ttyp(a))
+          .foreach(t => instantiateDatatypeTemplate(t))
         Method(name, pm.formalArgs map liftArgDecl, pm.formalReturns map liftReturnDecl, null, null, null)(pos, Translator.toInfo(p.annotations, pm))
     }
     members.put(decl.idndef.name, t)
@@ -611,7 +660,7 @@ case class Translator(program: PProgram) {
 
   def instantiateDatatypeTemplate(typ: Type) = {
     // TODO CFG: ADD METHOD TO MAKE AN INSTANCE WHICH IS A STUB WITH NO BODY
-    println(s"instantiating ${typ}")
+    println(s">>>>>> instantiating ${typ}")
     typ match {
       case d: DatatypeType => {
         if(!(instantiatedDatatypes.contains(typ))){
@@ -639,12 +688,34 @@ case class Translator(program: PProgram) {
           println(method.toString())
         }
       }
+      case _ =>
     }
   }
 
   def instantiateMethodTemplate(methodName: String, args: Seq[PType]): Unit = {
     println(s"instantiating method ${methodName} with ${args}")
     val temp = getMethodTemplate(methodName)
+    val error = (node: PNode) => (msg: String) => {}
+    val result = Unification.findUnificationForArgs(error, temp.ref, temp.ref.args.inner.toSeq.map(a => a.typ).zip(args))
+    println(s"UNIFICATION RESULT: ${result}")
+    // instantiating the datatype instances of the arguments
+    args.foreach(a => {
+      instantiateDatatypeTemplate(ttyp(a))
+    })
+
+    val substitution = PTypeSubstitution(result.get)
+
+    // usually use a deep copy
+    val adjustedBody = temp.ref.body.map(b => ParameterSubstitutor.processParametersSeqn(b, substitution))
+
+    addMember(Method(
+      temp.ref.idndef.name,
+      temp.ref.formalArgs.map(a => LocalVarDecl(a.idndef.name, ttyp(a.typ))()),
+      temp.ref.returns.map(m => m.formalReturns.inner.toSeq.map(r => LocalVarDecl(r.idndef.name, convertToViperType(ttyp(r.typ)))())).getOrElse(Nil),
+      Seq(), // TODO: adjust the pre and post conditions
+      Seq(), // TODO: adjust the pre and post conditions
+      adjustedBody.map(b => translatePSeqn(b))
+    )(temp.ref, NoInfo))
   }
 
   /** Takes a `PStmt` and turns it into a `Stmt`. */
@@ -700,41 +771,22 @@ case class Translator(program: PProgram) {
         methodCallAssign(s, Seq(targets.head), lv => NewStmt(lv.head, fields)(pos, info))
       case PAssign(PDelimited(idnuse: PIdnUseExp), _, rhs) =>
         LocalVarAssign(LocalVar(idnuse.name, ttyp(idnuse.decl.get.asInstanceOf[PAssignableVarDecl].typ))(pos, SourcePNodeInfo(idnuse)), exp(rhs))(pos, info)
-      case PAssign(PDelimited(field: PFieldAccess), _, rhs) =>{
+      case a@PAssign(PDelimited(field: PFieldAccess), _, rhs) =>{
         if(isDatatype(field.rcv.typ)) {
           println(s"FINDING DATATYPE FIELD: ${field.rcv.typ} -> ${field.idnref.name}")
           FieldAssign(FieldAccess(exp(field.rcv), findDatatypeField(ttyp(field.rcv.typ), field.idnref))(field, SourcePNodeInfo(field)), exp(rhs))(pos, info)
         }
         else {
           // TODO CFG: select the field with the given type associated :)
-          println(s"FINDING FIELD: ${field.rcv.typ} -> ${field.idnref.name}")
+          println(s"FINDING FIELD: ${field.rcv.typ} -> ${field.idnref.name} ${a.pretty}")
           FieldAssign(FieldAccess(exp(field.rcv), findField(field.idnref))(field, SourcePNodeInfo(field)), exp(rhs))(pos, info)
         }
       }
       case lv: PVars =>
         // there are no declarations in the Viper AST; rather they are part of the scope signature
         lv.assign map stmt getOrElse Statements.EmptyStmt
-      case PSeqn(ss) =>
-        val seqn = ss.inner.toSeq
-        val plocals = seqn.collect {
-          case l: PVars => Some(l)
-          case _ => None
-        }
-        val locals = plocals.flatten.map {
-          case p@PVars(_, vars, _) => {
-            vars.toSeq.map(v => {
-              val value = ttyp(v.typ) match {
-                case _: DatatypeType => {
-                  Ref
-                }
-                case e => e
-              }
-              LocalVarDecl(v.idndef.name, value)(p, SourcePNodeInfo(v))
-            })
-          }
-        }.flatten
-        println(s"locals: ${locals}")
-        Seqn(seqn filterNot (_.isInstanceOf[PSkip]) map stmt, locals)(pos, info)
+      case p@PSeqn(ss) => translatePSeqn(p)
+
       case PFold(_, e) =>
         Fold(exp(e).asInstanceOf[PredicateAccessPredicate])(pos, info)
       case PUnfold(_, e) =>
@@ -882,8 +934,10 @@ case class Translator(program: PProgram) {
   }
 
   protected def expInternal(pexp: PExp, pos: PExp, info: Info): Exp = {
+    println(s"TYPE OF EXP: ${pexp.typ}")
     pexp match {
       case PIdnUseExp(piu) =>
+        println(s"GETTING PIU: ${piu} ${piu.decl}")
         piu.decl match {
           case Some(_: PTypedVarDecl) => {
             val value = ttyp(pexp.typ) match {

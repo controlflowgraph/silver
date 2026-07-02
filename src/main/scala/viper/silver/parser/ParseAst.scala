@@ -162,6 +162,7 @@ trait PLeaf extends PNode {
 
 object PNode {
   def children(parent: PNode, n: Any): Iterator[Any] = {
+//    println(s"CHILDREN OF: ${n.toString}")
     n match {
       case _: PLeaf | _: Unit => Iterator.empty
       // Includes `Option`, `Seq`, etc.
@@ -467,6 +468,7 @@ case class PDomainType(domain: PIdnRef[PTypeDeclaration], args: Option[PDelimite
   }
 
   override def substitute(ts: PTypeSubstitution): PType = {
+    println(kind)
     require(kind == PDomainTypeKinds.Domain || kind == PDomainTypeKinds.Datatype || kind == PDomainTypeKinds.TypeVar || kind == PDomainTypeKinds.Undeclared)
     if (isTypeVar)
       if (ts.isDefinedAt(domain.name))
