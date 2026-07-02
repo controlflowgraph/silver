@@ -200,6 +200,44 @@ case class TypeVar(name: String) extends Type {
   //def !=(other: TypeVar) = name != other
 }
 
+sealed case class DatatypeType(datatypeName: String, partialTypVarsMap: Map[TypeVar, Type])
+                            (val typeParameters: Seq[TypeVar])
+  extends GenericType {
+
+  /* Map each type parameter `A` to `partialTypVarsMap(A)`, if defined, otherwise to `A` itself.
+   * `typVarsMap` thus contains a mapping for each type parameter.
+   */
+  val typVarsMap: Map[TypeVar, Type] =
+    typeParameters.map(tp => tp -> partialTypVarsMap.getOrElse(tp, tp)).to(implicitly)
+
+  override lazy val check =
+    if(!(typeParameters.toSet == typVarsMap.keys.toSet)) Seq(ConsistencyError(s"${typeParameters.toSet} doesn't equal ${typVarsMap.keys.toSet}", NoPosition)) else Seq()
+
+  override val genericName = datatypeName
+  override type MyType = DatatypeType
+
+  /** Returns this datatype type but adds the type variable mappings from `newTypVarsMap` to those
+   * already existing in `this.typVarsMap`. Already existing mappings will '''not''' be overridden!
+   * For example, if the underlying datatype has a type variable `A`, if `this.typVarsMap` contains
+   * `A -> Int` and if `newTypVarsMap` contains `A -> Bool`, then the result will still include
+   * the mapping `A -> Int`.
+   *
+   * @param newTypVarsMap Additional type variable mappings.
+   * @return A datatype type that corresponds to this datatype type plus the additional type
+   *         variable mappings.
+   */
+  override def make(newTypVarsMap: Map[TypeVar, Type]): MyType = {
+    assert (this.typVarsMap.keys.toSet equals this.typeParameters.toSet)
+    val newTypeMap = typVarsMap.map(kv=>kv._1 -> kv._2.substitute(newTypVarsMap))
+    DatatypeType(datatypeName, newTypeMap)(typeParameters)
+  }
+}
+
+object DatatypeType{
+  def apply(datatype: Datatype, typVarsMap: Map[TypeVar, Type]): DatatypeType =
+    DatatypeType(datatype.name, typVarsMap)(datatype.typVars)
+}
+
 case class BackendType(viperName: String, interpretations: Map[String, String]) extends AtomicType
 
 trait ExtensionType extends Type{

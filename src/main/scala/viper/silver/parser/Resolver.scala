@@ -501,6 +501,7 @@ case class TypeChecker(program: PProgram, names: NameAnalyser) {
           })
           formalArgs.foreach(fa => check(fa.typ))
           val unificationResult = findUnificationForArgs(c, formalArgs.map(f => f.typ) zip c.args.map(e => e.typ))
+          println(s"UNIFICATION RESULT: ${unificationResult}")
           unificationResult match {
             case Some(r) => {
               val ts = PTypeSubstitution(r)

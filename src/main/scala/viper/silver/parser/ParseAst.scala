@@ -1443,7 +1443,7 @@ trait PCallLike extends POpApp {
   def callArgs: PDelimited.Comma[PSym.Paren, PExp]
 }
 
-// Option[PGrouped[PSym.Bracket,PDelimited[(PReserved[PSym.Comma.type], PType),PReserved[PSym.Comma.type]]]]
+// TODO CFG: fix the ambiguity/resolution of predicates without `acc(...)` around
 case class PPredCall(idnref: PIdnRef[PCallable], params: Option[PGrouped[PSym.Bracket, PDelimited[PType, PReserved[PSym.Comma.type]]]], callArgs: PDelimited.Comma[PSym.Paren, PExp])(val pos: (Position, Position))
   extends PCallLike with PLocationAccess with PAccAssertion with PAssignTarget {
   override def loc = this

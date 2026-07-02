@@ -210,7 +210,7 @@ case class Program(domains: Seq[Domain], fields: Seq[Field], functions: Seq[Func
           case _: Label => None
           case _ => Some(ConsistencyError(s"No matching identifier $name found of type $expected, instead found of type ${d.getClass.getSimpleName}.", n.pos))
         }
-        case None => Some(ConsistencyError(s"No matching identifier $name found of type $expected.", n.pos))
+        case None => Some(ConsistencyError(s"123 No matching identifier $name found of type $expected.", n.pos))
       }
     }
 
@@ -561,6 +561,39 @@ case class Domain(name: String, functions: Seq[DomainFunc], axioms: Seq[DomainAx
 
   def instantiate(subst: Map[TypeVar, Type], program: Program): Domain = {
     instantiate(DomainType(this, subst), program)
+  }
+}
+
+case class DatatypeField(name: String, typ: Type)(val pos: Position = NoPosition, val info: Info = NoInfo, val errT: ErrorTrafo = NoTrafos) extends Location with Typed {
+  override lazy val check : Seq[ConsistencyError] =
+    if(!typ.isConcrete) Seq(ConsistencyError(s"Type of field $name must be concrete, but found $typ.", pos)) else Seq()
+
+  override def getMetadata:Seq[Any] = {
+    Seq(pos, info, errT)
+  }
+  val scopedDecls = Seq() //field is a scope because it is a member; it has no locals
+
+  def instantiate(mapping: Map[TypeVar, Type]): DatatypeField = {
+    DatatypeField(this.name, this.typ.substitute(mapping))(this.pos, this.info, this.errT)
+  }
+}
+
+case class Datatype(name: String, typVars: Seq[TypeVar], content: Seq[DatatypeField])
+                    (val pos: Position = NoPosition, val info: Info = NoInfo, val errT: ErrorTrafo = NoTrafos) extends Member with Positioned with Infoed with TransformableErrors {
+
+  override val scopedDecls: Seq[Declaration] = this.content.map(a => a)
+
+  def instantiate(args: Seq[Type]): Datatype = {
+    // expects to get the same number of args as type vars
+    if(this.typVars.length != args.length) {
+      throw new IllegalArgumentException("Expected equal number of arguments of generic parameters!")
+    }
+    val mapping: Map[TypeVar, Type] = (this.typVars zip args).toMap
+    Datatype(
+      this.name,
+      Seq.empty,
+      this.content.map(f => f.instantiate(mapping))
+    )(this.pos, this.info, this.errT)
   }
 }
 

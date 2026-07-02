@@ -639,6 +639,9 @@ object FastPrettyPrinter extends FastPrettyPrinterBase with BracketPrettyPrinter
       case dt@DomainType(domainName, typVarsMap) =>
         val typArgs = dt.typeParameters map (t => show(typVarsMap.getOrElse(t, t)))
         text(domainName) <> (if (typArgs.isEmpty) nil else brackets(ssep(typArgs, char (',') <> space)))
+      case dt@DatatypeType(dtName, typVarsMap) =>
+        val typArgs = dt.typeParameters map (t => show(typVarsMap.getOrElse(t, t)))
+        text(dtName) <> (if (typArgs.isEmpty) nil else brackets(ssep(typArgs, char (',') <> space)))
       case BackendType(viperName, _) => viperName
       case et: ExtensionType => et.prettyPrint
     }
@@ -664,6 +667,7 @@ object FastPrettyPrinter extends FastPrettyPrinterBase with BracketPrettyPrinter
   /** Show a statement. */
   def showStmt(stmt: Stmt): Cont = {
     val stmtDoc = stmt match {
+      case MakeStmt(target, typ, args) => show(target) <+> " " <+> showType(typ) <+> " " <+>  parens(ssep(args map show, group(char(',') <> line)))
       case NewStmt(target, fields) =>
         show(target) <+> ":=" <+> "new(" <> ssep(fields map (f => value(f.name)), char(',') <> space) <> ")"
       case LocalVarAssign(lhs, rhs) => show(lhs) <+> ":=" <+> nest(defaultIndent, show(rhs))
