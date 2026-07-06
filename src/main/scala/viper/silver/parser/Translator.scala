@@ -48,6 +48,7 @@ case class Translator(program: PProgram) {
 
   val methodTemplates: scala.collection.mutable.Map[String, MethodTemplate] = new mutable.HashMap[String, MethodTemplate]()
   val instantiatedMethods: scala.collection.mutable.Set[String] = new mutable.HashSet[String]()
+  val coreMethods: scala.collection.mutable.Set[String] = new mutable.HashSet[String]()
 
   var translatedMethods: scala.collection.mutable.Map[String, Method] = new mutable.HashMap[String, Method]()
   var translatedDatatypes: scala.collection.mutable.Map[String, Datatype] = new mutable.HashMap[String, Datatype]()
@@ -213,6 +214,7 @@ case class Translator(program: PProgram) {
         args,
         m
       )
+      coreMethods.add(m.idndef.name)
       methodTemplates.put(m.idndef.name, template)
     })
   }
@@ -266,7 +268,7 @@ case class Translator(program: PProgram) {
       * after signatures of domains and extensions because of the above mentioned reasons.
       */
     pdomains flatMap (_.funcs) foreach translateMemberSignature
-    (pfields ++ pfunctions ++ ppredicates ++ pmethods) foreach translateMemberSignature
+    (pfields ++ pfunctions ++ ppredicates) foreach translateMemberSignature
     println("translated signatures")
 
     /* [2022-03-14 Alessandro] After the signatures are translated, the actual full translations can be done
@@ -436,7 +438,11 @@ case class Translator(program: PProgram) {
   // helper methods that can be called if one knows what 'id' refers to
   private def findDomain(id: PIdentifier) = members(id.name).asInstanceOf[Domain]
   private def findField(id: PIdentifier) = members(id.name).asInstanceOf[Field]
-  private def findDatatypeField(typ: Type, id: PIdentifier) = members(encodeTypeAsString(typ) + "$$$" + id.name).asInstanceOf[Field]
+  private def findDatatypeField(typ: Type, id: PIdentifier) = {
+    println(s"FINDING THEEEEEEE DATATYPE FIELD: ${typ}")
+    println(s"RESULT: ${members(encodeTypeAsString(typ) + "$$$" + id.name)}")
+    members(encodeTypeAsString(typ) + "$$$" + id.name).asInstanceOf[Field]
+  }
   private def findFunction(id: PIdentifier) = members(id.name).asInstanceOf[Function]
   private def findDomainFunction(id: PIdentifier) = members(id.name).asInstanceOf[DomainFunc]
   private def findPredicate(id: PIdentifier) = members(id.name).asInstanceOf[Predicate]
@@ -496,6 +502,7 @@ case class Translator(program: PProgram) {
   def convertToViperType(typ: Type) : Type = {
     typ match {
       case _: DatatypeType => Ref
+      case _: TypeVar => Ref
       case e => e
     }
   }
@@ -703,17 +710,52 @@ case class Translator(program: PProgram) {
       instantiateDatatypeTemplate(ttyp(a))
     })
 
-    val substitution = PTypeSubstitution(result.get)
+    val mapping: mutable.HashMap[String, PType] = mutable.HashMap.from(result.get)
+    temp.generics.filter(g => !(result.get.contains(g)))
+      .map(g => (g, PPrimitiv(PReserved(PKw.Ref)(temp.ref.pos))()))
+      .foreach(kv => {
+        mapping.put(kv._1, kv._2)
+      })
+
+    val map: Map[String, PType] = mapping.toMap
+
+    val substitution = PTypeSubstitution(map)
+
+    println(")))))))))))))))))))))))))))")
+    println(s"SUB: ${substitution}")
+    println(")))))))))))))))))))))))))))")
 
     // usually use a deep copy
     val adjustedBody = temp.ref.body.map(b => ParameterSubstitutor.processParametersSeqn(b, substitution))
 
+    val presConverted = ParameterSubstitutor.processInvsSpecs(temp.ref.pres, substitution)
+      .specs
+      .toSeq
+      .map(v => v.e)
+      .map(exp)
+
+    val postsConverted = ParameterSubstitutor.processInvsSpecs(temp.ref.posts, substitution)
+      .specs
+      .toSeq
+      .map(v => v.e)
+      .map(exp)
+
+    val returning = temp.ref.returns.map(m => m.formalReturns.inner
+      .toSeq.map(r => LocalVarDecl(
+            r.idndef.name,
+            convertToViperType(ttyp(r.typ)))()))
+      .getOrElse(Nil)
+
+    val adjustedName = temp.ref.idndef.name + "$" + encodeTypeListAsString(args.map(ttyp))
+    val replacedArgs = temp.ref.formalArgs
+      .map(a => LocalVarDecl(a.idndef.name, convertToViperType(ttyp(a.typ.substitute(substitution))))())
+
     addMember(Method(
-      temp.ref.idndef.name,
-      temp.ref.formalArgs.map(a => LocalVarDecl(a.idndef.name, ttyp(a.typ))()),
-      temp.ref.returns.map(m => m.formalReturns.inner.toSeq.map(r => LocalVarDecl(r.idndef.name, convertToViperType(ttyp(r.typ)))())).getOrElse(Nil),
-      Seq(), // TODO: adjust the pre and post conditions
-      Seq(), // TODO: adjust the pre and post conditions
+      adjustedName,
+      replacedArgs,
+      returning,
+      presConverted,
+      postsConverted,
       adjustedBody.map(b => translatePSeqn(b))
     )(temp.ref, NoInfo))
   }
@@ -725,13 +767,14 @@ case class Translator(program: PProgram) {
     val sourcePNodeInfo = SourcePNodeInfo(pStmt)
     val info = if (annotations.isEmpty) sourcePNodeInfo else ConsInfo(sourcePNodeInfo, AnnotationInfo(annotations))
     s match {
-      case PAssign(targets, _, PCall(method, args, _)) if members(method.name).isInstanceOf[Method] => {
-//        println(s"translating ${method.name} with args ${args.pretty}")
+      case PAssign(targets, _, PCall(method, args, _)) if coreMethods.contains(method.name) => {
         instantiateMethodTemplate(method.name, args.inner.toSeq.map(e => e.typ))
-        methodCallAssign(s, targets.toSeq, ts => MethodCall(findMethod(method), args.inner.toSeq map exp, ts)(pos, info))
+        val methodName = method.name + "$" + encodeTypeListAsString(args.inner.toSeq.map(e => e.typ).map(ttyp))
+        val foundMethod = members(methodName).asInstanceOf[Method]
+        println(s"calling method: ${methodName}")
+        methodCallAssign(s, targets.toSeq, ts => MethodCall(foundMethod, args.inner.toSeq map exp, ts)(pos, info))
       }
       case PAssign(targets, _, PMakeExp(_, typ, args)) => {
-//        println(s"translating ${typ} with args ${args.pretty}")
         // instantiate datatype template
         val translatedType = ttyp(typ)
         instantiateDatatypeTemplate(translatedType)
@@ -756,7 +799,6 @@ case class Translator(program: PProgram) {
           val permExp = instantiated.content.filter(v => isDatatype(v.typ))
             .map(_ => FractionalPerm(IntLit(1)(), IntLit(1)())())
 
-          println(s"PERM EXPRESSIONS: ${permExp}")
           MethodCall(makeMethod, valExp ++ permExp, ts)(pos, info)
         })
       }
@@ -774,7 +816,11 @@ case class Translator(program: PProgram) {
       case a@PAssign(PDelimited(field: PFieldAccess), _, rhs) =>{
         if(isDatatype(field.rcv.typ)) {
           println(s"FINDING DATATYPE FIELD: ${field.rcv.typ} -> ${field.idnref.name}")
-          FieldAssign(FieldAccess(exp(field.rcv), findDatatypeField(ttyp(field.rcv.typ), field.idnref))(field, SourcePNodeInfo(field)), exp(rhs))(pos, info)
+          val resultingField = findDatatypeField(ttyp(field.rcv.typ), field.idnref)
+          println(resultingField)
+          val transformedRHS = exp(rhs)
+          println(s"TRANS RHS: ${transformedRHS}     ${transformedRHS.typ}")
+          FieldAssign(FieldAccess(exp(field.rcv), resultingField)(field, SourcePNodeInfo(field)), transformedRHS)(pos, info)
         }
         else {
           // TODO CFG: select the field with the given type associated :)
@@ -933,6 +979,8 @@ case class Translator(program: PProgram) {
     expInternal(pexp, pos, info)
   }
 
+  // TODO: the encoded signature of the datatype is the default one without replacement -> failed type matching
+
   protected def expInternal(pexp: PExp, pos: PExp, info: Info): Exp = {
     println(s"TYPE OF EXP: ${pexp.typ}")
     pexp match {
@@ -941,9 +989,8 @@ case class Translator(program: PProgram) {
         piu.decl match {
           case Some(_: PTypedVarDecl) => {
             val value = ttyp(pexp.typ) match {
-              case _: DatatypeType => {
-                Ref
-              }
+              case _: DatatypeType => Ref
+              case _: TypeVar => Ref
               case e => e
             }
             LocalVar(piu.name, value)(pos, info)
@@ -1072,7 +1119,7 @@ case class Translator(program: PProgram) {
         if(isDatatype(rcv.typ)) {
           val translatedType = ttyp(rcv.typ)
           instantiateDatatypeTemplate(translatedType)
-          println(s"FINDING DATATYPE FIELD FOR ACCESS: ${rcv.typ} -> ${idn.name}")
+          println(s"FINDING DATATYPE FIELD FOR ACCESS: ${translatedType} -> ${idn.name}")
           FieldAccess(exp(rcv), findDatatypeField(translatedType, idn))(pos, info)
         }
         else {

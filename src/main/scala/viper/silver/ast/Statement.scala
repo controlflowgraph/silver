@@ -75,7 +75,7 @@ case class LocalVarAssign(lhs: LocalVar, rhs: Exp)(val pos: Position = NoPositio
   override lazy val check : Seq[ConsistencyError] =
     (if(!Consistency.noResult(this)) Seq(ConsistencyError("Result variables are only allowed in postconditions of functions.", pos)) else Seq()) ++
     Consistency.checkPure(rhs) ++
-    (if(!Consistency.isAssignable(rhs, lhs)) Seq(ConsistencyError(s"Right-hand side $rhs is not assignable to left-hand side $lhs.", lhs.pos)) else Seq())
+    (if(!Consistency.isAssignable(rhs, lhs)) Seq(ConsistencyError(s"Right-hand side $rhs ${rhs.typ} is not assignable to left-hand side $lhs ${lhs.typ}.", lhs.pos)) else Seq())
 }
 
 /** An assignment to a field variable. */
@@ -83,7 +83,7 @@ case class FieldAssign(lhs: FieldAccess, rhs: Exp)(val pos: Position = NoPositio
   override lazy val check : Seq[ConsistencyError] =
     (if(!Consistency.noResult(this)) Seq(ConsistencyError("Result variables are only allowed in postconditions of functions.", pos)) else Seq()) ++
     Consistency.checkPure(rhs) ++
-    (if(!Consistency.isAssignable(rhs, lhs)) Seq(ConsistencyError(s"Right-hand side $rhs is not assignable to left-hand side $lhs.", lhs.pos)) else Seq())
+      (if(!Consistency.isAssignable(rhs, lhs)) Seq(ConsistencyError(s"Right-hand side $rhs ${rhs.typ} is not assignable to left-hand side $lhs ${lhs.typ}.", lhs.pos)) else Seq())
 }
 
 /** A method call. */

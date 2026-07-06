@@ -1,6 +1,6 @@
 package viper.silver.ast
 
-import viper.silver.parser.{PAccAssertion, PAccPred, PAnnotatedExp, PAnnotatedStmt, PApplyWand, PApplying, PAssert, PAsserting, PAssign, PAssume, PBinExp, PBinder, PBoolLit, PCall, PConstantLiteral, PCurPerm, PDebugLabelledOldExp, PDefine, PDefineBody, PDefineInner, PDelimited, PElse, PEpsilon, PExhale, PExists, PExp, PFieldAccess, PFold, PForPerm, PForall, PFullPerm, PGoto, PGrouped, PHeapOpApp, PIdnUseExp, PIf, PIfContinuation, PInhale, PInhaleExhaleExp, PIntLit, PKw, PLabel, PLet, PLetNestedScope, PLocationAccess, PMacroSeqn, PMagicWandExp, PMakeExp, PMaybePairArgument, PNewExp, PNoPerm, PNullLit, POldExp, POpApp, PPackageWand, PPredCall, PQuantifier, PQuasihavoc, PQuasihavocall, PReserved, PResourceAccess, PResultLit, PSeqn, PSimpleLiteral, PSkip, PSpecification, PSpecs, PStmt, PSym, PType, PTypeSubstitution, PUnfold, PUnfolding, PVars, PVersionedIdnUseExp, PWhile, PWildcard}
+import viper.silver.parser._
 import viper.silver.plugin.sif.{PLowEventExp, PLowExp, PRelExp}
 import viper.silver.plugin.standard.adt.{PAdtOpApp, PConstructorCall, PDestructorCall, PDiscriminatorCall}
 import viper.silver.plugin.standard.predicateinstance.PPredicateInstance
@@ -8,7 +8,6 @@ import viper.silver.plugin.standard.refute.PRefute
 import viper.silver.plugin.standard.smoke.PUnreachable
 import viper.silver.plugin.standard.termination.{PDecreasesClause, PDecreasesStar, PDecreasesTuple, PDecreasesWildcard}
 
-import scala.collection.Set
 
 object ParameterSubstitutor {
   def processParametersExp(exp: PExp, ts: PTypeSubstitution): PExp = {
@@ -69,7 +68,23 @@ object ParameterSubstitutor {
         case p@PDecreasesStar(star) => PDecreasesStar(star)(p.pos)
       }
       //case viper.silver.plugin.ParserPluginTemplate.PExampleExp() =>
-      case p@PIdnUseExp(idnref) => PIdnUseExp(idnref)
+      case p@PIdnUseExp(idnref) => {
+
+        def copyWithDecl[T <: PDeclarationInner](ahh: PIdnRef[T]): PIdnRef[T] = {
+          PIdnRef[T](ahh.name)(ahh.pos)(ahh.ctag)
+        }
+        val copiedRef = copyWithDecl(idnref)
+        p.decl.map(d => processParametersTypedVarDecl(d, ts))
+          .foreach(a => {
+            println(s"COPIED REF: ${copiedRef}")
+            println(s"ADDING NEW DECLARATION TO THE REFERENCE: ${a}")
+            copiedRef.newDecl(a)
+          })
+        val const = PIdnUseExp(copiedRef)
+        const.typ = p.typ.substitute(ts)
+        println(s"TYPE AFTER COPY: ${const.typ}")
+        const
+      }
       case p@PLet(l, variable, eq, exp, in, nestedScope) => {
         val updatedExp = exp.update(processParametersExp(exp.inner, ts))
         val updatedBody = processParametersExp(nestedScope.body, ts)
@@ -175,6 +190,18 @@ object ParameterSubstitutor {
     res
   }
 
+  def processParametersTypedVarDecl(decl: PTypedVarDecl, ts: PTypeSubstitution): PTypedVarDecl = {
+    decl match {
+      case decl: PAssignableVarDecl => decl match {
+        case p@PFormalReturnDecl(idndef, c, typ) => PFormalReturnDecl(idndef, c, typ.substitute(ts))(p.pos)
+        case p@PLocalVarDecl(idndef, c, typ) => PLocalVarDecl(idndef, c, typ.substitute(ts))(p.pos)
+      }
+      case p@PFormalArgDecl(idndef, c, typ) => PFormalArgDecl(idndef, c, typ.substitute(ts))(p.pos)
+      case p@PLogicalVarDecl(idndef, c, typ) => PLogicalVarDecl(idndef, c, typ.substitute(ts))(p.pos)
+      case p@PLetNestedScope(body) => PLetNestedScope(processParametersExp(body, ts))(p.pos)
+    }
+  }
+
   def processParametersLocationAccess(acc: PLocationAccess, ts: PTypeSubstitution): PLocationAccess = {
     acc match {
       case p@PCall(idnref, callArgs, typeAnnotated) => {
@@ -236,14 +263,14 @@ object ParameterSubstitutor {
     }
   }
 
-  def processInvsSpec(v: PSpecification[PKw.InvSpec], ts: PTypeSubstitution): PSpecification[PKw.InvSpec] = {
+  def processInvsSpec[T <: PKw.Spec](v: PSpecification[T], ts: PTypeSubstitution): PSpecification[T] = {
     val updatedExp = processParametersExp(v.e, ts)
-    PSpecification[PKw.InvSpec](v.k, updatedExp)(v.pos)
+    PSpecification[T](v.k, updatedExp)(v.pos)
   }
 
-  def processInvsSpecs(v: PSpecs[PKw.InvSpec] , ts: PTypeSubstitution): PSpecs[PKw.InvSpec] = {
+  def processInvsSpecs[T <: PKw.Spec](v: PSpecs[T] , ts: PTypeSubstitution): PSpecs[T] = {
     val updatedSpecs = v.specs.update(v.specs.toSeq.map(v => processInvsSpec(v, ts)))
-    PSpecs[PKw.InvSpec](updatedSpecs)(v.pos)
+    PSpecs[T](updatedSpecs)(v.pos)
   }
 
   def processParametersStmt(stmt: PStmt, ts: PTypeSubstitution): PStmt = {
@@ -263,8 +290,10 @@ object ParameterSubstitutor {
       }
       case p@PAssign(targets, op, rhs) => {
         val updatedRhs = processParametersExp(rhs, ts)
-        // TODO CFG: update the targets of the assignment
-        PAssign(targets, op, updatedRhs)(p.pos)
+
+        val updatedTargets = targets.update(targets.toSeq.map(a => processParametersExp(a, ts).asInstanceOf[PExp with PAssignTarget]))
+        // TODO CFG: update the targets of the assignment!!!!!!!!!!!!!!!!!!!!!!!!!
+        PAssign(updatedTargets, op, updatedRhs)(p.pos)
       }
       case p@PAssume(assume, e) => {
         val updatedExp = processParametersExp(e, ts)
