@@ -224,7 +224,9 @@ object ParameterSubstitutor {
       case p@PPredCall(idnref, params, callArgs) => {
         val updatedParams: Option[PGrouped[PSym.Bracket, PDelimited[PType, PReserved[PSym.Comma.type]]]] = params match {
           case Some(value) => {
-            val result = value.update(value.inner.toSeq.map(v => v.substitute(ts)))
+            val result = value.update(value.inner.toSeq.map(v => {
+              v.substitute(ts)
+            }))
             Some(result)
           }
           case None => None

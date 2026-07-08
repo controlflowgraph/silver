@@ -468,7 +468,6 @@ case class PDomainType(domain: PIdnRef[PTypeDeclaration], args: Option[PDelimite
   }
 
   override def substitute(ts: PTypeSubstitution): PType = {
-    println(kind)
     require(kind == PDomainTypeKinds.Domain || kind == PDomainTypeKinds.Datatype || kind == PDomainTypeKinds.TypeVar || kind == PDomainTypeKinds.Undeclared)
     if (isTypeVar)
       if (ts.isDefinedAt(domain.name))
@@ -743,6 +742,7 @@ object GenericParameterInstantiationHelper {
         PMakeExp(keyword, updatedType, updatedArgs)(p.pos)
       }
       case p@PPredCall(idnref, params, callArgs) => {
+        println(s"PROCESSING PREDICATE CALL: ${p.pretty}")
         val updatedParams: Option[PGrouped[PSym.Bracket, PDelimited[PType, PReserved[PSym.Comma.type]]]] = params match {
           case Some(value) => {
             val result = value.update(value.inner.toSeq.map(v => processParametersType(v, generics)))
@@ -922,6 +922,15 @@ object GenericParameterInstantiationHelper {
     }
   }
 
+  def processParametersSpecification[T <: PKw.Spec](spec: PSpecification[T], generics: Set[String]) : PSpecification[T] = {
+    PSpecification(spec.k, processParametersExp(spec.e, generics))(spec.pos)
+  }
+
+  def processParametersSpecs[T <: PKw.Spec](spec: PSpecs[T], generics: Set[String]): PSpecs[T] = {
+    PSpecs(spec.specs.update(
+      spec.specs.toSeq.map(v => processParametersSpecification(v, generics))))(spec.pos)
+  }
+
 
   def processParametersMethod(method: PMethod, generics: Set[String]): PMethod = {
     PMethod(
@@ -932,8 +941,8 @@ object GenericParameterInstantiationHelper {
       method.args.update(method.args.inner.toSeq.map(c => processParametersFormalArgDecl(c, generics))),
       method.returns.map(c => processParametersMethodReturns(c, generics)),
       // TODO CFG: FIX THIS
-      method.pres,
-      method.posts,
+      processParametersSpecs(method.pres, generics),
+      processParametersSpecs(method.posts, generics),
       //      PSpecs(method.pres.specs.update(method.pres.specs.toSeq.map(c => processParametersPSpecification(c, generics))))(method.pres.pos),
       //      PSpecs(method.posts.specs.update(method.posts.specs.toSeq.map(c => processParametersPSpecification(c, generics))))(method.posts.pos),
       method.body.map(c => processParametersMethodBody(c, generics)),

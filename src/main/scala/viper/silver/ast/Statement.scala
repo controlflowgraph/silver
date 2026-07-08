@@ -45,13 +45,13 @@ case class NewStmt(lhs: LocalVar, fields: Seq[Field])(val pos: Position = NoPosi
 
 }
 
-/** A statement that creates a new datatype instance and assigns it to a local variable. */
-case class MakeStmt(lhs: LocalVar, typ: Type, args: Seq[Exp])(val pos: Position = NoPosition, val info: Info = NoInfo, val errT: ErrorTrafo = NoTrafos) extends Stmt {
-  override lazy val check : Seq[ConsistencyError] =
-    (if(!Consistency.noResult(this)) Seq(ConsistencyError("Result variables are only allowed in postconditions of functions.", pos)) else Seq()) ++
-      (if(!(Ref isSubtype lhs)) Seq(ConsistencyError(s"Left-hand side of New statement must be Ref type, but found ${lhs.typ}", lhs.pos)) else Seq())
-
-}
+///** A statement that creates a new datatype instance and assigns it to a local variable. */
+//case class MakeStmt(lhs: LocalVar, typ: Type, args: Seq[Exp])(val pos: Position = NoPosition, val info: Info = NoInfo, val errT: ErrorTrafo = NoTrafos) extends Stmt {
+//  override lazy val check : Seq[ConsistencyError] =
+//    (if(!Consistency.noResult(this)) Seq(ConsistencyError("Result variables are only allowed in postconditions of functions.", pos)) else Seq()) ++
+//      (if(!(Ref isSubtype lhs)) Seq(ConsistencyError(s"Left-hand side of New statement must be Ref type, but found ${lhs.typ}", lhs.pos)) else Seq())
+//
+//}
 
 /** An assignment to a field or a local variable */
 sealed trait AbstractAssign extends Stmt {

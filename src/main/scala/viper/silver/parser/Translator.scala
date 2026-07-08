@@ -982,10 +982,8 @@ case class Translator(program: PProgram) {
   // TODO: the encoded signature of the datatype is the default one without replacement -> failed type matching
 
   protected def expInternal(pexp: PExp, pos: PExp, info: Info): Exp = {
-    println(s"TYPE OF EXP: ${pexp.typ}")
     pexp match {
       case PIdnUseExp(piu) =>
-        println(s"GETTING PIU: ${piu} ${piu.decl}")
         piu.decl match {
           case Some(_: PTypedVarDecl) => {
             val value = ttyp(pexp.typ) match {
@@ -1115,6 +1113,15 @@ case class Translator(program: PProgram) {
         if (bool.b) TrueLit()(pos, info) else FalseLit()(pos, info)
       case PNullLit(_) =>
         NullLit()(pos, info)
+      case p@PPredCall(name, params, callArgs) => {
+        val mappedArgs = callArgs.inner.toSeq.map(e => exp(e))
+        val convName = s"${name.name}${encodeTypeListAsString(
+          params.map(v => v.inner.toSeq)
+          .map(v => v.map(ttyp))
+          .getOrElse(Nil))}"
+        println(s"CONV NAME: ${convName}")
+        PredicateAccess(mappedArgs, convName)(pos=p.pos._1, info=NoInfo, errT = NoTrafos)
+      }
       case PFieldAccess(rcv, _, idn) =>{
         if(isDatatype(rcv.typ)) {
           val translatedType = ttyp(rcv.typ)
@@ -1310,7 +1317,6 @@ case class Translator(program: PProgram) {
 
   /** Takes a `PType` and turns it into a `Type`. */
   def ttyp(t: PType): Type = {
-    println(s"translating type: ${t}")
     t match {
       case PPrimitiv(name) => name.rs match {
         case PKw.Int => Int

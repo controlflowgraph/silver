@@ -76,8 +76,6 @@ case class TypeChecker(program: PProgram, names: NameAnalyser) {
   }
 
   def check(p: PProgram): Unit = {
-    println(p)
-
     /* [2022-03-14 Alessandro] Domain function declarations, method declarations and ordinary function declarations
      * must be checked before their application is checked. Especially, this is because type variables in signatures
      * must be resolved. However, the checks in the following block are independent of each other.
@@ -144,6 +142,18 @@ case class TypeChecker(program: PProgram, names: NameAnalyser) {
     checkMember(m) {
       // TODO CFG: check that all generic parameters are defined in the arguments and return type
       (m.formalArgs ++ m.formalReturns) foreach (a => check(a.typ))
+      // checking the preconditions
+      m.pres.specs.toSeq.foreach(s => {
+        println(s"resolving pre cond: ${s}")
+        println(s"CHECKING: ${s.e} ${s.e.getClass.getName}")
+        checkTopTyped(s.e, None)
+      })
+
+      // checking the postconditions
+      m.posts.specs.toSeq.foreach(s => {
+        println(s"resolving post cond: ${s}")
+        checkTopTyped(s.e, None)
+      })
     }
   }
 
@@ -379,7 +389,7 @@ case class TypeChecker(program: PProgram, names: NameAnalyser) {
           formalArgs.foreach(fa => check(fa.typ))
           val error = (node: PNode) => (msg: String) => messages ++= FastMessaging.message(node, msg)
           val unificationResult = Unification.findUnificationForArgs(error, c, formalArgs.map(f => f.typ) zip c.args.map(e => e.typ))
-          println(s"UNIFICATION RESULT: ${unificationResult}")
+          println(s"resolver UNIFICATION RESULT: ${unificationResult}")
           unificationResult match {
             case Some(r) => {
               val ts = PTypeSubstitution(r)
@@ -797,14 +807,25 @@ case class TypeChecker(program: PProgram, names: NameAnalyser) {
               issueError(r, "`result` can only be used in function postconditions")
           case _ =>
         }
+      case pc: PPredCall => {
+        println("special pred call case")
+        // check if the predicate is actually a datatype :)
+        println(s"DT NAME: ${pc.idnref.name}")
+        println(s"GOTTEN DT: ${getDatatypeByName(pc.idnref.name)}")
+        println("CHECKING THE PredCall!!!!!!!")
+        setType(Predicate)
+      }
 
       case poa: POpApp =>
         var isSpecialLookup: Boolean = false
+        var isDatatypePredicate: Boolean = false
         var resultingFieldType: PType = null
+//        println(s"POA IS: ${poa.getClass.getName}")
 
         if (poa.typeSubstitutions.isEmpty) {
           poa.args.foreach(checkInternal)
           var nestedTypeError = !poa.args.forall(a => a.typ.isValidOrUndeclared)
+//          println(s"SOME NESTED ERROR?!: ${nestedTypeError}")
           if (!nestedTypeError) {
             // Check purity of arguments
             poa.requirePure.foreach(a => if (!a.typ.isPure) issueError(a, "argument is not pure"))
@@ -895,18 +916,37 @@ case class TypeChecker(program: PProgram, names: NameAnalyser) {
 
 
               case acc: PAccPred =>
+                println(s"CHECKING THE ACC LOC: ${acc.loc}")
                 acc.loc match {
                   case _: PFieldAccess =>
                   case pc: PCall if pc.isPredicate => {
                     println(s"Call: ${pc}")
                   }
-                  case pc: PPredCall if pc.isPredicate => {
+                  case pc: PPredCall => {
+                    pc.callArgs.update(pc.callArgs.inner.toSeq.map(ca => {
+                      // TODO CFG: assure that the parameters of the predicate call match the declaration
+                      checkInternal(ca)
+                    }))
+                    // TODO CFG: check that the predicate correctly refers to a predicate
+                    println("CHECKING THE PC!!!!!!!")
+                    //check(pc.typ)
+//                    val pred: PPredicate = pc.idnref.decl.get.asInstanceOf[PPredicate]
+//                    pc.params.foreach(v => v.inner.toSeq.foreach(t => {
+//                      check(t)
+//                    }))
+//                    pred.formalArgs.zip(pc.callArgs.inner.toSeq)
+//                      .foreach(i => {
+//                        check(i._2, i._1.typ)
+//                      })
+//                    pc.params.map(v => v.update(v.inner.toSeq.map(t => GenericParameterInstantiationHelper.processParametersType(t))))
+                    println("resolving the pred call")
                     println(s"PredCall: ${pc}")
                     println(s"tv -> ${pc.params.map(v => v.inner.toSeq).getOrElse(Nil)}")
                     println(s"args -> ${pc.callArgs.inner.toSeq}")
+                    pc.typ = Predicate
                   }
                   case loc =>
-                    println(acc.loc.pretty)
+                    println(s"ERR ${acc.loc.pretty} ${acc.loc.getClass.getName}")
                     issueError(loc, "specified location is not a field nor a predicate")
                 }
                 acc.permExp match {
@@ -928,13 +968,36 @@ case class TypeChecker(program: PProgram, names: NameAnalyser) {
               case _: PCurPerm =>
                 if (permBan.isDefined)
                   issueError(poa, s"${permBan.get} are not allowed to contain `perm` expressions")
+              case pc: PPredCall => {
+                // check if the predicate is actually a datatype :)
+                println(s"DT NAME: ${pc.idnref.name}")
+                println(s"GOTTEN DT: ${getDatatypeByName(pc.idnref.name)}")
+                println("CHECKING THE PC!!!!!!!")
 
-              case _ =>
+//                val pred: PPredicate = pc.idnref.decl.get.asInstanceOf[PPredicate]
+//                pc.params.foreach(v => v.inner.toSeq.foreach(t => {
+//                  check(t)
+//                }))
+//                pred.formalArgs.zip(pc.callArgs.inner.toSeq)
+//                  .foreach(i => {
+//                    check(i._2, i._1.typ)
+//                  })
+//                println("resolving the pred call")
+//                println(s"PredCall: ${pc}")
+//                println(s"tv -> ${pc.params.map(v => v.inner.toSeq).getOrElse(Nil)}")
+//                println(s"args -> ${pc.callArgs.inner.toSeq}")
+
+                isDatatypePredicate = true;
+              }
+              case _ => {
+//                println(s"THE UNKNOWN STUFF IS: ${poa} ${poa.getClass.getName}")
+//                println()
+              }
             }
           }
 
 
-          if ((poa.signatures.nonEmpty || isSpecialLookup) && poa.args.forall(_.typeSubstitutions.nonEmpty) && !nestedTypeError) {
+          if ((poa.signatures.nonEmpty || isDatatypePredicate || isSpecialLookup) && poa.args.forall(_.typeSubstitutions.nonEmpty) && !nestedTypeError) {
             val ltr = getFreshTypeSubstitution(poa.localScope.toList) //local type renaming - fresh versions
             val rlts = (if (isSpecialLookup)
               poa match {
@@ -946,6 +1009,8 @@ case class TypeChecker(program: PProgram, names: NameAnalyser) {
                 }
               }
             else poa.signatures map (ts => refreshWith(ts, ltr))) //local substitutions refreshed)
+//            println(s"LTR: ${ltr}")
+//            println(s"RLTS: ${rlts}")
             val rrt: PDomainType = POpApp.pRes.substitute(ltr).asInstanceOf[PDomainType] // return type (which is a dummy type variable) replaced with fresh type
 
             def isTypeVar(t: PType): Boolean = {
@@ -960,16 +1025,12 @@ case class TypeChecker(program: PProgram, names: NameAnalyser) {
                 // special case for comparing a datatype to null which is ambiguous with the ref type
                 val leftIsDT = getDatatypeByName(exp.left.typ).isDefined || isTypeVar(exp.left.typ)
                 val rightIsDT = getDatatypeByName(exp.right.typ).isDefined || isTypeVar(exp.right.typ)
-                println(s"LR TYP: ${exp.left.typ}    ${exp.right.typ}")
                 if (exp.op.rs == EqEq || exp.op.rs == Ne) {
-                  println(s"checking if left right is null: ${poa.pretty}")
                   if (leftIsDT && exp.right.isInstanceOf[PNullLit]) {
-                    println("LEFT IS DT")
                     exp.right.typ = exp.left.typ
                   }
 
                   if (rightIsDT && exp.left.isInstanceOf[PNullLit]) {
-                    println("RIGHT IS DT")
                     exp.left.typ = exp.right.typ
                   }
                 }
@@ -1061,6 +1122,9 @@ case class TypeChecker(program: PProgram, names: NameAnalyser) {
         curMember = oldCurMember
 
       case pne: PNewExp => issueError(pne, s"unexpected use of `new` as an expression")
+      case _ => {
+        println(s"UNKNOWN EXPRESSION TO BE TYPE CHECKED/PROCESSED ${exp.pretty}")
+      }
     }
   }
 
