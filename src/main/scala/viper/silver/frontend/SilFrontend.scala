@@ -17,6 +17,7 @@ import viper.silver.verifier._
 import java.nio.file.{Path, Paths}
 import viper.silver.FastMessaging
 import viper.silver.ast.utility.chopper.PluginAwareChopper
+import viper.silver.inference.PermissionInference
 
 /**
  * Common functionality to implement a command-line verifier for Viper.  This trait
@@ -262,6 +263,17 @@ trait SilFrontend extends DefaultFrontend {
     }
   }
 
+  override def inference(): Unit = {
+    _program match {
+      case Some(value) => {
+        println("HERRRE::::::::::::::::::::::::::::::::::::::::::::::")
+        PermissionInference(value).process()
+        println("HERRRE::::::::::::::::::::::::::::::::::::::::::::::")
+      }
+      case None =>
+    }
+  }
+
   override def verification(): Unit = {
     def filter(input: Program): Result[Program] = {
       plugins.beforeMethodFilter(input) match {
@@ -383,36 +395,87 @@ trait SilFrontend extends DefaultFrontend {
   }
 
   override def doTranslation(input: PProgram): Result[Program] = {
+    try{
+      plugins.beforeTranslate(input) match {
+        case Some(modifiedInputPlugin) =>
+          val translator = Translator(modifiedInputPlugin)
+          FrontendStateCache.translator = translator
+          translator.translate match {
+            case Some(program) =>{
+              println("§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§")
+              println("successful translation")
+              println(program.toString())
+              println("§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§")
+              Succ(program)
+            }
 
-    plugins.beforeTranslate(input) match {
-      case Some(modifiedInputPlugin) =>
-        val translator = Translator(modifiedInputPlugin)
-        FrontendStateCache.translator = translator
-        translator.translate match {
-          case Some(program) =>
-            Succ(program)
+            case None => // then there are translation messages
+              println("TRANSLATION ERROR!!!!")
+              Fail(FastMessaging.sortmessages(Consistency.messages) map (m => {
+                TypecheckerError(m.label, m.pos)
+              }))
+          }
 
-          case None => // then there are translation messages
-            Fail(FastMessaging.sortmessages(Consistency.messages) map (m => {
-              TypecheckerError(m.label, m.pos)
-            }))
-        }
-
-      case None => Fail(plugins.errors)
+        case None => Fail(plugins.errors)
+      }
+    }
+    catch {
+      case e: Exception => {
+        println("::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::")
+        println("::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::")
+        println(e.toString)
+        e.getStackTrace.toList.take(100).foreach(println)
+//        println(e.getStackTrace.toList.head)
+//        println(e.getStackTrace.toList.tail.head)
+//        println(e.getStackTrace.toList.tail.tail.head)
+//        println(e.getStackTrace.toList.tail.tail.tail.head)
+//        println(e.getStackTrace.toList.tail.tail.tail.tail.head)
+//        println(e.getStackTrace.toList.tail.tail.tail.tail.tail.head)
+//        println(e.getStackTrace.toList.tail.tail.tail.tail.tail.tail.head)
+//        println(e.getStackTrace.toList.tail.tail.tail.tail.tail.tail.tail.head)
+//        println(e.getStackTrace.toList.tail.tail.tail.tail.tail.tail.tail.tail.head)
+//        println(e.getStackTrace.toList.tail.tail.tail.tail.tail.tail.tail.tail.tail.head)
+//        println(e.getStackTrace.toList.tail.tail.tail.tail.tail.tail.tail.tail.tail.tail.head)
+//        println(e.getStackTrace.toList.tail.tail.tail.tail.tail.tail.tail.tail.tail.tail.tail.head)
+//        println(e.getStackTrace.toList.tail.tail.tail.tail.tail.tail.tail.tail.tail.tail.tail.tail.head)
+//        println(e.getStackTrace.toList.tail.tail.tail.tail.tail.tail.tail.tail.tail.tail.tail.tail.tail.head)
+//        println(e.getStackTrace.toList.tail.tail.tail.tail.tail.tail.tail.tail.tail.tail.tail.tail.tail.tail.head)
+//        println(e.getStackTrace.toList.tail.tail.tail.tail.tail.tail.tail.tail.tail.tail.tail.tail.tail.tail.tail.head)
+//        println(e.getStackTrace.toList.tail.tail.tail.tail.tail.tail.tail.tail.tail.tail.tail.tail.tail.tail.tail.tail.head)
+        println("::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::")
+        println("::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::")
+        throw new IllegalStateException("AHHH")
+      }
     }
   }
 
   def doConsistencyCheck(input: Program): Result[Program] = {
-    if (config != null) {
-      Consistency.setFunctionPreconditionLegacyMode(config.respectFunctionPrePermAmounts())
+    try{
+      if (config != null) {
+        Consistency.setFunctionPreconditionLegacyMode(config.respectFunctionPrePermAmounts())
+      }
+      var errors = input.checkTransitively
+      println(s"ERRROS: ${errors}")
+      if (backendTypeFormat.isDefined)
+        errors = errors ++ Consistency.checkBackendTypes(input, backendTypeFormat.get)
+      if (errors.isEmpty) {
+        Succ(input)
+      } else {
+        Fail(errors)
+      }
     }
-    var errors = input.checkTransitively
-    if (backendTypeFormat.isDefined)
-      errors = errors ++ Consistency.checkBackendTypes(input, backendTypeFormat.get)
-    if (errors.isEmpty) {
-      Succ(input)
-    } else {
-      Fail(errors)
+    catch {
+      case e: Exception => {
+        println("::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::")
+        println("::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::")
+        println(e.toString)
+        println(e.getStackTrace.toList.head)
+        println(e.getStackTrace.toList.tail.head)
+        println(e.getStackTrace.toList.tail.tail.head)
+        println("::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::")
+        println("::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::")
+        throw new IllegalStateException("Exception in consistency check!")
+      }
     }
   }
 }
