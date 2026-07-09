@@ -791,6 +791,12 @@ case class Translator(program: PProgram) {
 
         */
         //methodCallAssign(s, Seq(targets.head), ts => MakeStmt(ts.head, ttyp(typ), args.inner.toSeq map exp)(pos, info))
+        println("targets:")
+        targets.toSeq.foreach(t => {
+          println(t, t.typ)
+          // TODO: figure out how to adjust the types of the targets to match the viper encoding types
+          //t.typ = convertToViperType(ttyp(t.typ))
+        })
 
         methodCallAssign(s, targets.toSeq, ts => {
           val instantiated = instantiatedDatatypes(translatedType)
@@ -889,7 +895,9 @@ case class Translator(program: PProgram) {
     * ```
     */
   def methodCallAssign(errorNode: PNode, targets: Seq[PExp with PAssignTarget], assign: Seq[LocalVar] => Stmt): Stmt = {
+    println("assign targets: ")
     val tTargets = targets map exp
+    tTargets.foreach(e => println(e, e.typ))
     val ts = tTargets.zipWithIndex.map {
       case (lv: LocalVar, _) => (None, lv)
       case (fa: FieldAccess, i) => {
@@ -912,6 +920,9 @@ case class Translator(program: PProgram) {
       }
       case _ => sys.error(s"Found invalid target of assignment")
     }
+
+    println(s"TS: ${ts}")
+    println(s"ASSIGN: ${assign}")
     val assn = assign(ts.map(_._2))
     val tmps = ts.flatMap(_._1)
     if (tmps.isEmpty)

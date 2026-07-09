@@ -169,7 +169,6 @@ case class PermissionInference(program: Program) {
                   case None => {
                     // instantiate
                     // add direct and folded predicates as requirement
-                    println("instantiating sub predicate")
                     val predDef = defs(pred.name)
                     val inst = VariableInstantiation(predDef.params.zip(pred.values).toMap)
                     val res = predDef.body.instantiate(inst)
@@ -184,12 +183,10 @@ case class PermissionInference(program: Program) {
             }
           }
 
-          println(s"after: ${remainingDirect} ${remainingFolded}")
-
-          println("unfolding strategies:")
-          strategies.foreach(e => println(e))
-          println()
-          println("unfolding failures:")
+//          println("unfolding strategies:")
+//          strategies.foreach(e => println(e))
+//          println()
+          println("---------------------- unfolding failures ----------------------")
           failures.foreach(e => println(e))
 
           if (failures.isEmpty) {
@@ -217,6 +214,23 @@ case class PermissionInference(program: Program) {
       TransparentPredicateTree(
         this.direct.union(instBody.direct),
         this.folded.diff(Set(pred)).union(instBody.folded)
+      )
+    }
+
+    def fold(defs: Map[String, PredDef], pred: PredInstance): TransparentPredicateTree = {
+      val predDef = defs(pred.name)
+      val inst = VariableInstantiation(predDef.params.zip(pred.values).toMap)
+      val instBody = predDef.body.instantiate(inst)
+      if(!instBody.direct.subsetOf(this.direct)) {
+        sys.error(s"Not all field access permissions present when folding predicate ${pred} (missing: ${instBody.direct.diff(this.direct)})")
+      }
+
+      if(!instBody.folded.subsetOf(this.folded)) {
+        sys.error(s"Not all predicate permissions present when folding predicate ${pred} (missing: ${instBody.folded.diff(this.folded)})")
+      }
+      TransparentPredicateTree(
+        this.direct.diff(instBody.direct),
+        this.folded.diff(instBody.folded).union(Set(pred))
       )
     }
 
@@ -267,6 +281,26 @@ case class PermissionInference(program: Program) {
     def addFieldAccessPerm(acc: FieldAcc): TransparentPredicateTree = {
       union(TransparentPredicateTree(Set(acc), Set()))
     }
+
+    def exhale(acc: FieldAcc): TransparentPredicateTree = {
+      println(s"exhaling: ${acc.pretty()}")
+      TransparentPredicateTree(this.direct.diff(Set(acc)), this.folded)
+    }
+
+    def exhale(pred: PredInstance): TransparentPredicateTree = {
+      println(s"exhaling: ${pred.pretty()}")
+      TransparentPredicateTree(this.direct, this.folded.diff(Set(pred)))
+    }
+
+    def inhale(acc: FieldAcc): TransparentPredicateTree = {
+      println(s"inhaling: ${acc.pretty()}")
+      TransparentPredicateTree(this.direct.union(Set(acc)), this.folded)
+    }
+
+    def inhale(pred: PredInstance): TransparentPredicateTree = {
+      println(s"inhaling: ${pred.pretty()}")
+      TransparentPredicateTree(this.direct, this.folded.union(Set(pred)))
+    }
   }
 
   def locToTerm(loc: Exp): Term = {
@@ -289,6 +323,30 @@ case class PermissionInference(program: Program) {
     }
   }
 
+  case class IntTerm(value: BigInt) extends Term {
+
+    override def instantiate(vars: VariableInstantiation): Term = this
+
+    override def pretty(): String = this.value.toString()
+  }
+
+  case class BoolTerm(value: Boolean) extends Term {
+
+    override def instantiate(vars: VariableInstantiation): Term = this
+
+    override def pretty(): String = s"${this.value}"
+  }
+
+  case class FracPerm(left: Term, right: Term) extends Term {
+
+    override def instantiate(vars: VariableInstantiation): Term = FracPerm(
+      this.left.instantiate(vars),
+      this.right.instantiate(vars)
+    )
+
+    override def pretty(): String = this.left.pretty() + "/" + this.right.pretty()
+  }
+
   def expToTerm(exp: Exp): Term = {
     exp match {
       case LocalVar(name, _) => Ident(name)
@@ -296,6 +354,13 @@ case class PermissionInference(program: Program) {
         expToTerm(rcv),
         field.name
       )
+      case FractionalPerm(left, right) => FracPerm(
+        expToTerm(left),
+        expToTerm(right)
+      )
+      case IntLit(i) => IntTerm(i)
+      case FalseLit() => BoolTerm(false)
+      case TrueLit() => BoolTerm(true)
       case _ => {
         throw new IllegalArgumentException(s"Unknown expression type ${exp.getClass.getName} to convert to term!")
       }
@@ -345,20 +410,63 @@ case class PermissionInference(program: Program) {
       .toMap
   }
 
-  def collectAccessRequirements(exp: Exp): Set[FieldAcc] = {
+  case class PermissionRequirements(fields: Set[FieldAcc], predicates: Set[PredInstance]) {
+    def withField(field: FieldAcc) : PermissionRequirements = {
+      PermissionRequirements(this.fields.union(Set(field)), this.predicates)
+    }
+
+    def withPred(pred: PredInstance) : PermissionRequirements = {
+      PermissionRequirements(this.fields, this.predicates.union(Set(pred)))
+    }
+
+    def merge(other: PermissionRequirements) : PermissionRequirements = {
+      PermissionRequirements(this.fields.union(other.fields), this.predicates.union(other.predicates))
+    }
+
+    def substitute(init: VariableInstantiation): PermissionRequirements = {
+      PermissionRequirements(
+        this.fields.map(f => f.instantiate(init)),
+        this.predicates.map(p => p.instantiate(init))
+      )
+    }
+  }
+
+  def collectAccessRequirements(exp: Exp): PermissionRequirements = {
     exp match {
-      //      case predicate: AccessPredicate =>
-      //      case InhaleExhaleExp(in, ex) =>
-      //      case exp: PermExp =>
+      case _: Unfolding => PermissionRequirements(Set(), Set())
+      case And(a, b) => {
+        val reqA = collectAccessRequirements(a)
+        val reqB = collectAccessRequirements(b)
+        reqA.merge(reqB)
+      }
+      case LeCmp(a, b) => {
+        val reqA = collectAccessRequirements(a)
+        val reqB = collectAccessRequirements(b)
+        reqA.merge(reqB)
+      }
+      case PredicateAccessPredicate(pred, permExp) => {
+        PermissionRequirements(Set(), Set(PredInstance(pred.predicateName, pred.args.map(expToTerm))))
+      }
+      case NeCmp(a, b) => {
+        val reqA = collectAccessRequirements(a)
+        val reqB = collectAccessRequirements(b)
+        reqA.merge(reqB)
+      }
+      case Implies(cond, body) => {
+        val reqCond = collectAccessRequirements(cond)
+        val reqBody = collectAccessRequirements(body)
+        reqCond.merge(reqBody)
+      }
+      case FractionalPerm(_, _) => PermissionRequirements(Set(), Set())
       case access: LocationAccess => access match {
         case FieldAccess(LocalVar(name, _), field) => {
-          Set(FieldAcc(Ident(name), field.name))
+          PermissionRequirements(Set(FieldAcc(Ident(name), field.name)), Set())
         }
         case FieldAccess(rcv, field) => {
           val subs = collectAccessRequirements(rcv)
-          if (subs.size == 1) {
-            val fa = subs.toSeq.head
-            Set(FieldAcc(fa, field.name), fa)
+          if (subs.fields == 1) {
+            val fa = subs.fields.toSeq.head
+            PermissionRequirements(Set(FieldAcc(fa, field.name), fa), Set())
           }
           else {
             throw new IllegalStateException(s"Expected subexpression to require a single field access ${exp}")
@@ -368,27 +476,8 @@ case class PermissionInference(program: Program) {
           throw new IllegalArgumentException(s"Unknown expression type ${exp.getClass.getName}")
         }
       }
-      case _: AbstractLocalVar => Set()
-      case _: Literal => Set()
-      //      case access: ResourceAccess =>
-      //      case CondExp(cond, thn, els) =>
-      //      case Unfolding(acc, body) =>
-      //      case Applying(wand, body) =>
-      //      case Asserting(a, body) =>
-      //      case Let(variable, exp, body) =>
-      //      case exp: QuantifiedExp =>
-      //      case ForPerm(variables, resource, body) =>
-      //      case exp: SeqExp =>
-      //      case exp: SetExp =>
-      //      case exp: MultisetExp =>
-      //      case exp: MapExp =>
-      //      case trigger: PossibleTrigger =>
-      //      case trigger: ForbiddenInTrigger =>
-      //      case app: FuncLikeApp =>
-      //      case exp: BinExp =>
-      //      case exp: UnExp =>
-      //      case lhs: Lhs =>
-      //      case exp: ExtensionExp =>
+      case _: AbstractLocalVar => PermissionRequirements(Set(), Set())
+      case _: Literal => PermissionRequirements(Set(), Set())
     }
   }
 
@@ -427,32 +516,43 @@ case class PermissionInference(program: Program) {
     }
   }
 
-  def applyUnfoldingStrategies(defs: Map[String, PredDef], tpt: TransparentPredicateTree, strategies: Seq[Seq[PredInstance]]): TransparentPredicateTree = {
-    strategies.foldLeft((tpt, Set[PredInstance]()))((state, strat) => {
-      strat.foldLeft(state)((curr, pred) => {
-        if (curr._2.contains(pred)) {
-          curr
-        }
-        else {
-          (curr._1.unfold(defs, pred), curr._2.union(Set(pred)))
-        }
-      })
-    })._1
+  def applyUnfoldingStrategies(defs: Map[String, PredDef], tpt: TransparentPredicateTree, strategy: FoldingStrategy): TransparentPredicateTree = {
+
+    strategy.steps.foldLeft(tpt)((state, strat) => {
+      if(strat.unfolding){
+        state.unfold(defs, strat.pred)
+      }
+      else {
+        state.fold(defs, strat.pred)
+      }
+    })
+//      strat.foldLeft(state)((curr, pred) => {
+//        if (curr._2.contains(pred)) {
+//          curr
+//        }
+//        else {
+//          (curr._1.unfold(defs, pred), curr._2.union(Set(pred)))
+//        }
+//      })
+//    })._1
   }
 
-  def getUnfoldingStrategiesForAllRequirements(depth: Int, tpt: TransparentPredicateTree, defs: Map[String, PredDef], requirements: Set[FieldAcc]): Option[Seq[Seq[PredInstance]]] = {
-    val start: Option[Seq[Seq[PredInstance]]] = Some(Seq[Seq[PredInstance]]())
-    val reqs = requirements.map(r => tpt.findUnfoldingStrategy(defs, r, depth))
-      .foldLeft(start)((acc, strat) => {
+  def getUnfoldingStrategiesForAllRequirements(depth: Int, tpt: TransparentPredicateTree, defs: Map[String, PredDef], requirements: PermissionRequirements): Option[FoldingStrategy] = {
+    val start: Option[FoldingStrategy] = Some(FoldingStrategy(Seq()))
+    val reqs1 = requirements.fields.map(r => (r.pretty(), tpt.findUnfoldingStrategyForDirect(defs, r, depth)))
+    val reqs2 = requirements.predicates.map(p => (p.pretty(), tpt.findRefoldingStrategy(defs, p, depth)))
+    (reqs1 ++ reqs2).foldLeft(start)((acc, strat) => {
         acc match {
-          case Some(lst) => strat match {
-            case Some(steps) => Some(lst ++ Seq(steps))
-            case None => None
+          case Some(lst) => strat._2 match {
+            case Some(steps) => Some(lst.merge(steps))
+            case None => {
+              println(s"no strategy for ${strat._1}")
+              None
+            }
           }
           case None => None
         }
       })
-    reqs
   }
 
   def inferMethod(defs: Map[String, PredDef], method: Method, depth: Int): Unit = {
@@ -486,7 +586,22 @@ case class PermissionInference(program: Program) {
               //  collect all postconditions -> inhale permissions
               //        ->> replace the variables in the post conditions with the values passed into them
               val method = program.methods.find(m => m.name.equals(name)).get
-              val requirements = method.pres.map(collectAccessRequirements).foldLeft(Set[FieldAcc]())((a, b) => a.union(b))
+              val methodArgNames = method.formalArgs.map(_.name)
+              val init = VariableInstantiation(methodArgNames.zip(args.map(expToTerm)).toMap)
+              val requirements = method.pres.map(collectAccessRequirements)
+                .foldLeft(PermissionRequirements(Set(), Set()))((a, b) => a.merge(b))
+                .substitute(init)
+
+
+              println("CURRENT TPT:")
+              println(tpt.pretty())
+
+              println(s"REQUIREMENTS:")
+              println("\tfields:")
+              requirements.fields.foreach(f => println(s"\t\t${f.pretty()}"))
+              println("\tpredicates:")
+              requirements.predicates.foreach(f => println(s"\t\t${f.pretty()}"))
+
               val strats = getUnfoldingStrategiesForAllRequirements(depth, tpt, defs, requirements)
 
               val unfolded = strats match {
@@ -496,17 +611,32 @@ case class PermissionInference(program: Program) {
                 }
               }
 
-              tpt
+
+              val retInit = VariableInstantiation(method.formalReturns.map(f => f.name).zip(targets.map(l => Ident(l.name))).toMap)
+              val posts = method.posts.map(collectAccessRequirements)
+                .foldLeft(PermissionRequirements(Set(), Set()))((a, b) => a.merge(b))
+                .substitute(retInit)
+              val fieldsExhaled = requirements.fields.foldLeft(unfolded)((a, b) => a.exhale(b))
+              val exhaled = requirements.predicates.foldLeft(fieldsExhaled)((a, b) => a.exhale(b))
+
+              val fieldsInhaled = posts.fields.foldLeft(exhaled)((a, b) => a.inhale(b))
+              val inhaled = posts.predicates.foldLeft(fieldsInhaled)((a, b) => a.inhale(b))
+              inhaled
             }
             case assign: AbstractAssign => assign match {
               case LocalVarAssign(lhs, rhs) => {
+                // assuming access permission for variable is guaranteed
                 val requirements = collectAccessRequirements(rhs)
-                // TODO CFG: ensure that the permissions for the fields
-                //                println(s"requiring ${requirements} for the assignment")
-                tpt
+                val reqs = getUnfoldingStrategiesForAllRequirements(depth, tpt, defs, requirements)
+                reqs match {
+                  case Some(value) => applyUnfoldingStrategies(defs, tpt, value)
+                  case None => {
+                    sys.error("Unable to find unfolding strategy for all requirements!")
+                  }
+                }
               }
               case FieldAssign(lhs, rhs) => {
-                val requirements = collectAccessRequirements(rhs).union(Set(faToFA(lhs)))
+                val requirements = collectAccessRequirements(rhs).withField(faToFA(lhs))
                 //                println(s"requiring ${requirements} for the field assignment")
                 val reqs = getUnfoldingStrategiesForAllRequirements(depth, tpt, defs, requirements)
 
@@ -520,24 +650,6 @@ case class PermissionInference(program: Program) {
                 }
               }
             }
-            //            case MethodCall(methodName, args, targets) =>
-            //            case Exhale(exp) =>
-            //            case Inhale(exp) =>
-            //            case Assert(exp) =>
-            //            case Assume(exp) =>
-            //            case Fold(acc) =>
-            //            case Unfold(acc) =>
-            //            case Package(wand, proofScript) =>
-            //            case Apply(exp) =>
-            //            case Seqn(ss, scopedSeqnDeclarations) =>
-            //            case If(cond, thn, els) =>
-            //            case While(cond, invs, body) =>
-            //            case Label(name, invs) =>
-            //            case Goto(target) =>
-            //            case LocalVarDeclStmt(decl) =>
-            //            case Quasihavoc(lhs, exp) =>
-            //            case Quasihavocall(vars, lhs, exp) =>
-            //            case stmt: ExtensionStmt =>
           }
         })
         println(s"${afterTPT.pretty()}")
@@ -557,6 +669,10 @@ case class PermissionInference(program: Program) {
 
       /*
       automatic termination criterion if the argument field length is shorter than all existing fields in the current predicate
+
+      x.next.value => List(???) => ???.value     List(???.next) List(???.next.value)
+
+      which assumptions are made about the predicates?
       */
 
       /*
@@ -569,17 +685,36 @@ case class PermissionInference(program: Program) {
       /*
       no normalized layer in which all complex operations are replaced with inhale/exhale operations
       -> maybe introduce such a view in order to simplify the analysis and have fewer distinct cases
-      -> only have inhale/exhale/assert
+      -> only have inhale/exhale/assert/havoc
 
       field access --> assert
       method call --> exhale + inhale
       new --> inhale
+      assignment
+
+      + einfache expressions
+
+      feldzugriff auf einer ebene -> normalisierung
+      sequencing
+      non det branching
+
+      perms for A & perms for B
+      {
+        assume cond
+      }
+      {
+        assume !cond
+      }
+
+      perms after A | perms after B
 
       */
 
       /*
       backpropagation of additional permissions that are requires
       -> how to handle permission abduction within the local scope?
+
+      ->> silicon forward pass + carbon backward pass -> differing errors?
       */
       println("--------------------------")
       println("--------- TTTT -----------")

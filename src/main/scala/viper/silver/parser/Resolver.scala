@@ -413,6 +413,9 @@ case class TypeChecker(program: PProgram, names: NameAnalyser) {
           })
           case Left(_) =>
         }
+      case PAssign(targets, _, m@PMakeExp(_, ct, args)) if targets.length == 1 =>
+        checkInternal(targets.head)
+        checkInternal(m)
       case PAssign(targets, _, rhs) if targets.length == 1 => {
         println(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
         println(s"checking rhs with ${targets.head} has type ${targets.head.typ}")
@@ -791,6 +794,10 @@ case class TypeChecker(program: PProgram, names: NameAnalyser) {
         // TODO CFG: fix this
         check(m.constTyp)
         setType(m.constTyp)
+        m.args.foreach(e => {
+          // TODO CFG: fix the resoling logic for the  arguments to respect the types of the constructor
+          checkInternal(e)
+        })
       }
 
       case t: PExtender => t.typecheck(this, names).getOrElse(Nil) foreach (message =>
