@@ -5,6 +5,8 @@ import viper.silver.inference.v2.knowledge.Knowledge
 
 trait PredTerm {
   def substitute(ts: TermSub): PredTerm
+
+  def pretty() : String
 }
 
 case class PredImpl(cond: Set[Knowledge], body: PredTerm) extends PredTerm {
@@ -14,6 +16,8 @@ case class PredImpl(cond: Set[Knowledge], body: PredTerm) extends PredTerm {
       this.body.substitute(ts)
     )
   }
+
+  override def pretty(): String = this.cond.map(_.pretty()).mkString(" & ") + " ==> " + this.body.pretty()
 }
 
 case class PredTrue() extends PredTerm {
@@ -22,6 +26,7 @@ case class PredTrue() extends PredTerm {
     PredTrue()
   }
 
+  override def pretty(): String = "True"
 }
 
 case class PredAnd(a: PredTerm, b: PredTerm) extends PredTerm {
@@ -31,6 +36,8 @@ case class PredAnd(a: PredTerm, b: PredTerm) extends PredTerm {
       this.b.substitute(ts)
     )
   }
+
+  override def pretty(): String = this.a.pretty() + " && " + this.b.pretty()
 }
 
 case class PredFieldAcc(fa: FieldAcc) extends PredTerm {
@@ -39,6 +46,8 @@ case class PredFieldAcc(fa: FieldAcc) extends PredTerm {
       this.fa.substitute(ts).asInstanceOf[FieldAcc]
     )
   }
+
+  override def pretty(): String = "acc(" + this.fa.pretty() + ")"
 }
 
 case class PredPredAcc(pred: PredInstance) extends PredTerm {
@@ -47,6 +56,8 @@ case class PredPredAcc(pred: PredInstance) extends PredTerm {
       this.pred.substitute(ts)
     )
   }
+
+  override def pretty(): String = "acc(" + this.pred.pretty() + ")"
 }
 
 case class PredNot(pred: PredTerm) extends PredTerm {
@@ -55,4 +66,6 @@ case class PredNot(pred: PredTerm) extends PredTerm {
       this.pred.substitute(ts)
     )
   }
+
+  override def pretty(): String = "!" + this.pred.pretty()
 }

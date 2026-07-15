@@ -1,6 +1,7 @@
 package viper.silver.inference.v2.ast
 
 import viper.silver.ast.{AbstractLocalVar, AccessPredicate, And, Exp, FalseLit, FieldAccess, FieldAccessPredicate, FractionalPerm, Implies, IntLit, LeCmp, LocalVar, LocationAccess, PredicateAccessPredicate, Program, TrueLit}
+import viper.silver.inference.v2.knowledge.{Knowledge, KnowledgeBase}
 import viper.silver.inference.v2.{PredInstance, TransparentPredicateTree}
 
 case class PredDef(name: String, params: Seq[String], body: TransparentPredicateTree) {
@@ -42,20 +43,27 @@ object PredDefConstructor {
         val r2 = collectTPTContent(b)
         r1.union(r2)
       }
-      case Implies(_, b) => collectTPTContent(b) // TODO CFG: think about if there can be access predicates on the left side
+      case Implies(cond, body) => {
+        // TODO CFG: think about if there can be access predicates on the left side
+        val base = Knowledge.conditionToKnowledgeSet(cond)
+        val tpt = collectTPTContent(body)
+        val mappedDirect = tpt.direct.map(v => (base.union(v._1), v._2))
+        val mappedFolded = tpt.folded.map(v => (base.union(v._1), v._2))
+        TransparentPredicateTree(mappedDirect, mappedFolded)
+      }
       case LeCmp(_, _) => TransparentPredicateTree(Set(), Set())
       case predicate: AccessPredicate => predicate match {
         case FieldAccessPredicate(loc, _) => {
-          val direct = Set(locToTerm(loc).asInstanceOf[FieldAcc])
-          val folded = Set[PredInstance]()
+          val direct = Set[(Set[Knowledge], FieldAcc)]((Set(), locToTerm(loc).asInstanceOf[FieldAcc]))
+          val folded = Set[(Set[Knowledge], PredInstance)]()
           TransparentPredicateTree(direct, folded)
         }
         case p@PredicateAccessPredicate(loc, _) => {
-          val direct = Set[FieldAcc]()
-          val folded = Set(PredInstance(
+          val direct = Set[(Set[Knowledge], FieldAcc)]()
+          val folded = Set[(Set[Knowledge], PredInstance)]((Set(), PredInstance(
             loc.predicateName,
             loc.args.map(expToTerm)
-          ))
+          )))
           TransparentPredicateTree(direct, folded)
         }
         case _ => {

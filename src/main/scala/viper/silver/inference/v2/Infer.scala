@@ -2,7 +2,8 @@ package viper.silver.inference.v2
 
 import viper.silver.ast._
 import viper.silver.inference.v2.ast._
-import viper.silver.inference.v2.knowledge.{Equivalence, IsNonNull, IsNull, Knowledge}
+import viper.silver.inference.v2.knowledge.Knowledge.collectKnowledgeAboutTerm
+import viper.silver.inference.v2.knowledge.{Equivalence, IsNonNull, IsNull, Knowledge, KnowledgeBase, SAT}
 
 case class Infer(program: Program) {
 
@@ -166,10 +167,13 @@ case class Infer(program: Program) {
     val instantiated = definition.body.instantiate(init)
 
     // combine field access permissions
-    val directExhale = instantiated.direct.map(d => PredFieldAcc(d))
+    // TODO: filter only the ones that are not 100% unsat (conservative)
+    //       or the ones that are 100% sat (optimistic)
+    val directExhale = instantiated.direct.map(d => PredFieldAcc(d._2))
       .reduceOption[PredTerm]((a, b) => PredAnd(a, b))
     // combine predicate permissions
-    val foldedExhale = instantiated.folded.map(d => PredPredAcc(d))
+    // TODO: same here as above for the filtering with knowledge
+    val foldedExhale = instantiated.folded.map(d => PredPredAcc(d._2))
       .reduceOption[PredTerm]((a, b) => PredAnd(a, b))
     // combine field and predicate permissions
     val body = (directExhale, foldedExhale) match {
@@ -181,39 +185,6 @@ case class Infer(program: Program) {
 
     val folded = PredPredAcc(PredInstance(pred.predicateName, terms))
     (folded, body)
-  }
-
-  trait ProofResult {}
-
-  object SAT extends ProofResult {}
-
-  object UNSAT extends ProofResult {}
-
-  object UNKNOWN extends ProofResult {}
-
-  case class KnowledgeBase(knowledge: Set[Knowledge]) {
-
-    def prove(k: Knowledge): ProofResult = {
-      // TODO: replace with sensible implementation
-      if (this.knowledge.contains(k)) {
-        SAT
-      }
-      else {
-        UNSAT
-      }
-    }
-
-    def extend(k: Knowledge): KnowledgeBase = {
-      this.extend(Set(k))
-    }
-
-    def extend(k: Set[Knowledge]): KnowledgeBase = {
-      KnowledgeBase(this.knowledge.union(k))
-    }
-
-    def pretty(): String = {
-      "{" + this.knowledge.map(k => k.pretty()).mkString(", ") + "}"
-    }
   }
 
   def collectContainedPermissions(pt: PredTerm): Set[PredTerm] = {
@@ -254,10 +225,10 @@ case class Infer(program: Program) {
     }
   }
 
-  def getUnfoldingStrategiesForAllRequirements(depth: Int, tpt: TransparentPredicateTree, defs: Map[String, PredDef], requirements: PermissionRequirements): Option[FoldingStrategy] = {
+  def getUnfoldingStrategiesForAllRequirements(depth: Int, ts: TermSub, kb: KnowledgeBase, tpt: TransparentPredicateTree, defs: Map[String, PredDef], requirements: PermissionRequirements): Option[FoldingStrategy] = {
     val start: Option[FoldingStrategy] = Some(FoldingStrategy(Seq()))
-    val reqs1 = requirements.fields.map(r => (r.pretty(), tpt.findUnfoldingStrategyForDirect(defs, r, depth)))
-    val reqs2 = requirements.predicates.map(p => (p.pretty(), tpt.findRefoldingStrategy(defs, p, depth)))
+    val reqs1 = requirements.fields.map(r => (r.pretty(), tpt.findUnfoldingStrategyForDirect(defs, ts, kb, r, depth)))
+    val reqs2 = requirements.predicates.map(p => (p.pretty(), tpt.findRefoldingStrategy(defs, ts, kb, p, depth)))
     println(s"reqs1: ${reqs1}")
     println(s"reqs2: ${reqs2}")
     (reqs1 ++ reqs2).foldLeft(start)((acc, strat) => {
@@ -301,28 +272,54 @@ case class Infer(program: Program) {
     }
   }
 
-  def applySteps(defs: Map[String, PredDef], tpt: TransparentPredicateTree, strategy: FoldingStrategy) : TransparentPredicateTree = {
+  def applySteps(defs: Map[String, PredDef], ts: TermSub, tpt: TransparentPredicateTree, strategy: FoldingStrategy) : TransparentPredicateTree = {
     strategy.steps.foldLeft(tpt)((t, s) => {
       if (s.unfolding) {
-        t.unfold(defs, s.pred)
+        t.unfold(defs, ts, s.pred.substitute(ts))
       }
       else {
-        t.fold(defs, s.pred)
+        t.fold(defs, ts, s.pred.substitute(ts))
       }
     })
   }
 
-  def processWithVals(defs: Map[String, PredDef], seq: Sequence, kb: KnowledgeBase, predTree: TransparentPredicateTree): Unit = {
-    var knowledge = kb
+  def processWithVals(defs: Map[String, PredDef], seq: Sequence, initKB: KnowledgeBase, predTree: TransparentPredicateTree): Unit = {
+    var knowledge = initKB
     var tpt = predTree
+    var equi = Seq[Equivalence]()
+    var tempVarCounter = 0
+
     for (elem <- seq.lines) {
       println("")
       println("TPT: " + tpt.pretty())
       println("KB: " + knowledge.pretty())
-      println("INST: " + elem)
+      println(s"EQUI: ${equi.map(_.pretty()).mkString(";")}")
+      println("INST: " + elem.pretty())
       elem match {
         case VarAssignLine(v, e) => {
+          val renaming = Seq(Equivalence(v, Var("$v" + tempVarCounter, v.typ)))
+          equi = equi ++ renaming
+          tempVarCounter += 1
 
+          // rename the current instance of the variable to a temporary
+          val renamingTs = TermSub(renaming.map(v => (v.a, v.b)).toMap)
+          knowledge = knowledge.substitute(renamingTs)
+
+          tpt = tpt.substitute(renamingTs)
+
+          val subbedE = e.substitute(renamingTs)
+
+          val req = collectRequirements(subbedE)
+          val ts = TermSub(equi.map(v => (v.a, v.b)).toMap)
+          val valueStrat = getUnfoldingStrategiesForAllRequirements(searchDepth, ts, knowledge, tpt, defs, req)
+          valueStrat match {
+            case Some(value) => {
+              tpt = applySteps(defs, ts, tpt, value)
+            }
+            case None => {
+              println(s"Unable to find unfolding strategy for: ${elem}")
+            }
+          }
         }
         case seq: Sequence => processWithVals(defs, seq, knowledge, tpt)
         case InhaleLine(pred) => {
@@ -332,13 +329,22 @@ case class Infer(program: Program) {
             current = current.diff(Set(top))
             top match {
               case PredImpl(cond, body) => {
-                val allSat = cond.forall(c => knowledge.prove(c) == SAT)
-                if (allSat) {
-                  current = current.union(collectContainedPermissions(body))
+                val contained = collectContainedPermissions(body)
+                contained.foreach {
+                  case PredFieldAcc(fa) => {
+                    println(s"ADDING GUARDED F ACC: ${cond.map(_.pretty()).mkString(" & ")} => ${fa.pretty()}")
+                    tpt = tpt.inhale(cond, fa)
+                  }
+                  case PredPredAcc(pi) => {
+                    println(s"ADDING GUARDED P INST: ${cond.map(_.pretty()).mkString(" & ")} => ${pi.pretty()}")
+                    tpt = tpt.inhale(cond, pi)
+                  }
+                  case p => {
+                    throw new IllegalArgumentException(s"Unable to process nested permissions ${p}")
+                  }
                 }
               }
               case PredFieldAcc(fa) => {
-
                 tpt = tpt.inhale(fa)
                 knowledge.extend(collectKnowledgeAboutTerm(fa))
               }
@@ -348,7 +354,7 @@ case class Infer(program: Program) {
                 val predDef = defs(pi.name)
                 val vars = VariableInstantiation(predDef.params.zip(pi.values).toMap)
                 val facs = predDef.body.instantiate(vars)
-                  .direct.map(v => collectKnowledgeAboutTerm(v))
+                  .direct.map(v => collectKnowledgeAboutTerm(v._2))
                   .foldLeft(Set[Knowledge]())((a, b) => a.union(b))
 
                 knowledge = knowledge.extend(facs)
@@ -357,21 +363,46 @@ case class Infer(program: Program) {
           }
         }
         case FieldAssignLine(v, e) => {
-          val req = collectRequirements(e)
-          val valueStrat = getUnfoldingStrategiesForAllRequirements(searchDepth, tpt, defs, req)
+          val renaming = Seq(Equivalence(v, Var("$v" + tempVarCounter, v.typ)))
+          equi = equi ++ renaming
+          tempVarCounter += 1
+
+          // rename the current instance of the variable to a temporary
+          val renamingTs = TermSub(renaming.map(v => (v.a, v.b)).toMap)
+          knowledge = knowledge.substitute(renamingTs)
+          // TODO: potentially construct a secondary renaming that will only touch the variables
+          // when assigned like: x.value := something then
+          //    acc(x.value) is unchanged
+          //    acc(x.value.field) becomes acc($v1.field)
+          // QUESTION: what happens when something = x
+          // TODO: ALSO RENAME THE OLD INSTANCES IN THE EXPR OF THE ASSIGNMENT
+          //       -> rename x to vX and have equivalence x = vX by assignment
+          tpt = tpt.substitute(renamingTs)
+
+          val subbedE = e.substitute(renamingTs)
+
+          val adjusted = Equivalence(v, subbedE)
+          equi = equi ++ Seq(adjusted)
+          val adjustingTs = TermSub(Seq((adjusted.a, adjusted.b)).toMap)
+          tpt = tpt.substitute(adjustingTs)
+          knowledge = knowledge.substitute(adjustingTs)
+
+          val req = collectRequirements(subbedE)
+          val ts = TermSub(equi.map(v => (v.a, v.b)).toMap)
+          val valueStrat = getUnfoldingStrategiesForAllRequirements(searchDepth, ts, knowledge, tpt, defs, req)
           valueStrat match {
             case Some(value) => {
-              tpt = applySteps(defs, tpt, value)
+              tpt = applySteps(defs, ts, tpt, value)
             }
             case None => {
               println(s"Unable to find unfolding strategy for: ${elem}")
             }
           }
 
-          val destStrat = tpt.findUnfoldingStrategyForDirect(defs, v, searchDepth)
+          val destStrat = tpt.findUnfoldingStrategyForDirect(defs, ts, knowledge, v, searchDepth)
           destStrat match {
             case Some(value) => {
-              tpt = applySteps(defs, tpt, value)
+              tpt = applySteps(defs, ts, tpt, value)
             }
             case None => {
               println(s"Unable to find unfolding strategy for: ${elem}")
@@ -381,7 +412,10 @@ case class Infer(program: Program) {
           //Equivalence(v, e)
         }
         case ExhaleLine(pred) => {
-          var current = collectContainedPermissions(pred)
+          val ts = TermSub(equi.map(v => (v.a, v.b)).toMap)
+          val subbedPred = pred.substitute(ts)
+          println(s"SUBBED PRED: ${subbedPred}")
+          var current = collectContainedPermissions(subbedPred)
           println(s"CONTAINED PERMISSIONS: ${current}")
           while (current != Set()) {
             val top = current.toSeq.head
@@ -399,9 +433,9 @@ case class Infer(program: Program) {
                 // TODO: delete knowledge regarding this stuff
               }
               case PredPredAcc(pi) => {
-                tpt.findRefoldingStrategy(defs, pi, searchDepth) match {
+                tpt.findRefoldingStrategy(defs, ts, knowledge, pi, searchDepth) match {
                   case Some(value) => {
-                    tpt = applySteps(defs, tpt, value)
+                    tpt = applySteps(defs, ts, tpt, value)
                   }
                   case None => {
                     // TODO: report error / collect errors
@@ -421,27 +455,6 @@ case class Infer(program: Program) {
     }
   }
 
-  def collectKnowledgeAboutTerm(t: Term): Set[Knowledge] = {
-    var knowledge = Set[Knowledge]()
-
-    // add knowledge about the values inside the sub parts of the field access being nonnull
-    var propped: Term = t
-    while (propped.isInstanceOf[FieldAcc]) {
-      val sub = propped.asInstanceOf[FieldAcc].v
-      knowledge = knowledge.union(Set(IsNonNull(sub)))
-      propped = sub
-    }
-
-    // if the bottom part is a variable it must be nonnull
-    propped match {
-      case _: Var => {
-        knowledge = knowledge.union(Set(IsNonNull(propped)))
-      }
-    }
-
-    knowledge
-  }
-
   def translateMethodToInternalForm(defs: Map[String, PredDef], method: Method): Unit = {
     println(s"METHOD: ${method.name}")
     val mappedBody = method.body.map(v => {
@@ -454,7 +467,7 @@ case class Infer(program: Program) {
       val body = transformSeqnToInternalForm(defs, v)
       val joined = inhaling.join(body).join(exhaling)
       println("::::::::::::: LINES :::::::::::::::::")
-      joined.lines.foreach(v => println(s"\t\t\t${v}"))
+      println(joined.pretty(4))
       println(":::::::::::::::::::::::::::::::::::::")
       processsssss(defs, joined)
       joined
