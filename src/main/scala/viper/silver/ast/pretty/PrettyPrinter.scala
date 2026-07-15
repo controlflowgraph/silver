@@ -668,6 +668,7 @@ object FastPrettyPrinter extends FastPrettyPrinterBase with BracketPrettyPrinter
   /** Show a statement. */
   def showStmt(stmt: Stmt): Cont = {
     val stmtDoc = stmt match {
+      case Injection(value) => text(s"injection ${value}")
       case NewStmt(target, fields) =>
         show(target) <+> ":=" <+> "new(" <> ssep(fields map (f => value(f.name)), char(',') <> space) <> ")"
       case LocalVarAssign(lhs, rhs) => show(lhs) <+> ":=" <+> nest(defaultIndent, show(rhs))

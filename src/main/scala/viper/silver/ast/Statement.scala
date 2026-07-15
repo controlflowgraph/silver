@@ -175,6 +175,10 @@ case class If(cond: Exp, thn: Seqn, els: Seqn)(val pos: Position = NoPosition, v
     (if(!Consistency.noResult(this)) Seq(ConsistencyError("Result variables are only allowed in postconditions of functions.", pos)) else Seq())
 }
 
+case class Injection(id: Int)(val pos: Position = NoPosition, val info: Info = NoInfo, val errT: ErrorTrafo = NoTrafos) extends Stmt {
+  override lazy val check : Seq[ConsistencyError] = Seq()
+}
+
 /** A while loop. */
 case class While(cond: Exp, invs: Seq[Exp], body: Seqn)
                 (val pos: Position = NoPosition, val info: Info = NoInfo, val errT: ErrorTrafo = NoTrafos)

@@ -49,14 +49,14 @@ object PredDefConstructor {
         val tpt = collectTPTContent(body)
         val mappedDirect = tpt.direct.map(v => (base.union(v._1), v._2))
         val mappedFolded = tpt.folded.map(v => (base.union(v._1), v._2))
-        TransparentPredicateTree(mappedDirect, mappedFolded)
+        TransparentPredicateTree(Seq(), mappedDirect, mappedFolded)
       }
-      case LeCmp(_, _) => TransparentPredicateTree(Set(), Set())
+      case LeCmp(_, _) => TransparentPredicateTree(Seq(), Set(), Set())
       case predicate: AccessPredicate => predicate match {
         case FieldAccessPredicate(loc, _) => {
           val direct = Set[(Set[Knowledge], FieldAcc)]((Set(), locToTerm(loc).asInstanceOf[FieldAcc]))
           val folded = Set[(Set[Knowledge], PredInstance)]()
-          TransparentPredicateTree(direct, folded)
+          TransparentPredicateTree(Seq(), direct, folded)
         }
         case p@PredicateAccessPredicate(loc, _) => {
           val direct = Set[(Set[Knowledge], FieldAcc)]()
@@ -64,7 +64,7 @@ object PredDefConstructor {
             loc.predicateName,
             loc.args.map(expToTerm)
           )))
-          TransparentPredicateTree(direct, folded)
+          TransparentPredicateTree(Seq(), direct, folded)
         }
         case _ => {
           throw new IllegalArgumentException(s"Unknown expression type ${exp.getClass.getName}")

@@ -51,6 +51,7 @@ case class Infer(program: Program) {
       case And(a, b) => {
         PredAnd(expToPredTerm(a), expToPredTerm(b))
       }
+      case _: NeCmp => PredTrue()
       case _: LeCmp => PredTrue()
       case _: Unfolding => PredTrue()
       case Implies(cond, body) => {
@@ -62,12 +63,20 @@ case class Infer(program: Program) {
     }
   }
 
-  def transformSeqnToInternalForm(defs: Map[String, PredDef], seq: Seqn): Sequence = {
-    Sequence(seq.ss.map(s => translateStmtToInternalForm(defs, s)))
+  def transformSeqnToInternalForm(defs: Map[String, PredDef], seq: Seqn): (Seqn, Sequence) = {
+    val transformed: Seq[(Stmt, Line)] = seq.ss.map(s => translateStmtToInternalForm(defs, s))
+    (Seqn(transformed.map(_._1), seq.scopedSeqnDeclarations)(), Sequence(transformed.map(_._2)))
   }
 
+  private var injectionId = 0
 
-  def translateStmtToInternalForm(defs: Map[String, PredDef], stmt: Stmt): Line = {
+  def freshInjection(): Injection = {
+    val inj = Injection(injectionId)()
+    injectionId += 1
+    inj
+  }
+
+  def translateStmtToInternalForm(defs: Map[String, PredDef], stmt: Stmt): (Stmt, Line) = {
     stmt match {
       case NewStmt(lhs, fields) => {
 
@@ -80,25 +89,38 @@ case class Infer(program: Program) {
           .reduceOption[PredTerm]((a, b) => PredAnd(a, b))
           .getOrElse(PredTrue())
 
-        InhaleLine(mapped)
+        (stmt, InhaleLine(mapped))
       }
       case assign: AbstractAssign => assign match {
-        case LocalVarAssign(lhs, rhs) => VarAssignLine(
-          Var(lhs.name, lhs.typ),
-          expToTerm(rhs)
-        )
-        case FieldAssign(lhs, rhs) => FieldAssignLine(
-          FieldAcc(expToTerm(lhs.rcv), lhs.field.name, lhs.typ),
-          expToTerm(rhs)
-        )
+        case LocalVarAssign(lhs, rhs) => {
+          val inj = freshInjection()
+          val line = VarAssignLine(
+            inj,
+            Var(lhs.name, lhs.typ),
+            expToTerm(rhs)
+          )
+
+          (Seqn(Seq(inj, stmt), Seq())(), line)
+        }
+        case FieldAssign(lhs, rhs) => {
+          val inj = freshInjection()
+          val line = FieldAssignLine(
+            inj,
+            FieldAcc(expToTerm(lhs.rcv), lhs.field.name, lhs.typ),
+            expToTerm(rhs)
+          )
+          (Seqn(Seq(inj, stmt), Seq())(), line)
+        }
       }
       case MethodCall(methodName, args, targets) => {
-//        MethodCallLine(
-//          targets.map(t => Var(t.name, t.typ)),
-//          methodName,
-//          args.map(a => expToTerm(a))
-//        )
+        //        MethodCallLine(
+        //          targets.map(t => Var(t.name, t.typ)),
+        //          methodName,
+        //          args.map(a => expToTerm(a))
+        //        )
         // TODO: remove knowledge about the passed arguments
+
+        val inj = freshInjection()
 
         val meth = this.program.methods.find(m => m.name.equals(methodName))
           .get
@@ -107,7 +129,7 @@ case class Infer(program: Program) {
 
         val exhales = meth.pres.map(p => expToPredTerm(p))
           .map(t => t.substitute(TermSub(argRepl.toMap)))
-          .map(v => InhaleLine(v))
+          .map(v => ExhaleLine(inj, v))
 
         val retRepl = meth.formalReturns.map(v => Var(v.name, v.typ)).zip(targets.map(v => Var(v.name, v.typ)))
 
@@ -115,42 +137,71 @@ case class Infer(program: Program) {
           .map(t => t.substitute(TermSub((argRepl ++ retRepl).toMap)))
           .map(v => InhaleLine(v))
 
-        Sequence(exhales ++ inhales)
+        val line = Sequence(exhales ++ inhales)
+        (Seqn(Seq(inj, stmt), Seq())(), line)
       }
-      case Exhale(exp) => ExhaleLine(expToPredTerm(exp))
-      case Inhale(exp) => InhaleLine(expToPredTerm(exp))
-      case Assert(exp) => AssertLine(expToPredTerm(exp))
-      case Assume(exp) => AssumeLine(expToPredTerm(exp))
+      case Exhale(exp) => {
+        val inj = freshInjection()
+        val line = ExhaleLine(inj, expToPredTerm(exp))
+        (Seqn(Seq(inj, stmt), Seq())(), line)
+      }
+      case Inhale(exp) => (stmt, InhaleLine(expToPredTerm(exp)))
+      case Assert(exp) => {
+        val inj = freshInjection()
+        val line = AssertLine(inj, expToPredTerm(exp))
+        (Seqn(Seq(inj, stmt), Seq())(), line)
+      }
+      case Assume(exp) => (stmt, AssumeLine(expToPredTerm(exp), Knowledge.conditionToKnowledgeSet(exp)))
       case Fold(acc) => {
+        val inj = freshInjection()
+
         val inst = instantiatePredicateFolding(defs, acc)
         val body = inst._2
         val folded = inst._1
 
-        Sequence(Seq(
-          ExhaleLine(body),
+        val line = Sequence(Seq(
+          ExhaleLine(inj, body),
           InhaleLine(folded)
         ))
+
+        (Seqn(Seq(inj, stmt), Seq())(), line)
       }
       case Unfold(acc) => {
+        val inj = freshInjection()
+
         val inst = instantiatePredicateFolding(defs, acc)
         val body = inst._2
         val folded = inst._1
 
 
-        Sequence(Seq(
-          ExhaleLine(folded),
+        val line = Sequence(Seq(
+          ExhaleLine(inj, folded),
           InhaleLine(body)
         ))
+
+        (Seqn(Seq(inj, stmt), Seq())(), line)
       }
 
       case seq: Seqn => transformSeqnToInternalForm(defs, seq)
-      case If(cond, thn, els) => {
+      case i@If(cond, thn, els) => {
 
+        // TODO: potentially split the condition into pred term and knowledge set
         val translatedCondition = expToPredTerm(cond)
-        NonDetBranch(
-          transformSeqnToInternalForm(defs, thn).prepend(AssumeLine(translatedCondition)),
-          transformSeqnToInternalForm(defs, els).prepend(AssumeLine(PredNot(translatedCondition))),
+        val knowledge = Knowledge.conditionToKnowledgeSet(cond)
+        val inj = freshInjection()
+
+        val thnTrans = transformSeqnToInternalForm(defs, thn)
+        val elsTrans = transformSeqnToInternalForm(defs, els)
+
+        val line = NonDetBranch(
+          inj,
+          thnTrans._2.prepend(AssumeLine(translatedCondition, knowledge)),
+          elsTrans._2.prepend(AssumeLine(PredNot(translatedCondition), knowledge.map(_.negate()))),
         )
+
+        val transIf = If(cond, thnTrans._1, elsTrans._1)(i.pos, i.info, i.errT)
+
+        (Seqn(Seq(inj, transIf), Seq())(), line)
       }
     }
   }
@@ -189,6 +240,7 @@ case class Infer(program: Program) {
 
   def collectContainedPermissions(pt: PredTerm): Set[PredTerm] = {
     pt match {
+      case PredNot(_) => Set() // TODO: internal part might contain important information (e.g. double negation)
       case PredAnd(a, b) => collectContainedPermissions(a).union(collectContainedPermissions(b))
       case p: PredFieldAcc => Set(p)
       case p: PredImpl => Set(p)
@@ -198,22 +250,23 @@ case class Infer(program: Program) {
     }
   }
 
-  def processsssss(defs: Map[String, PredDef], seq: Sequence): Unit = {
+  def processsssss(defs: Map[String, PredDef], seq: Sequence): Seq[(Injection, FoldingStep)] = {
     val knowledge = KnowledgeBase(Set())
-    val tpt = TransparentPredicateTree(Set(), Set())
-    processWithVals(defs, seq, knowledge, tpt)
+    val tpt = TransparentPredicateTree(Seq(), Set(), Set())
+    val result = processWithVals(defs, seq, knowledge, tpt)
+    result._2.foldingStory
   }
 
   case class PermissionRequirements(fields: Set[FieldAcc], predicates: Set[PredInstance]) {
-    def withField(field: FieldAcc) : PermissionRequirements = {
+    def withField(field: FieldAcc): PermissionRequirements = {
       PermissionRequirements(this.fields.union(Set(field)), this.predicates)
     }
 
-    def withPred(pred: PredInstance) : PermissionRequirements = {
+    def withPred(pred: PredInstance): PermissionRequirements = {
       PermissionRequirements(this.fields, this.predicates.union(Set(pred)))
     }
 
-    def merge(other: PermissionRequirements) : PermissionRequirements = {
+    def merge(other: PermissionRequirements): PermissionRequirements = {
       PermissionRequirements(this.fields.union(other.fields), this.predicates.union(other.predicates))
     }
 
@@ -229,8 +282,6 @@ case class Infer(program: Program) {
     val start: Option[FoldingStrategy] = Some(FoldingStrategy(Seq()))
     val reqs1 = requirements.fields.map(r => (r.pretty(), tpt.findUnfoldingStrategyForDirect(defs, ts, kb, r, depth)))
     val reqs2 = requirements.predicates.map(p => (p.pretty(), tpt.findRefoldingStrategy(defs, ts, kb, p, depth)))
-    println(s"reqs1: ${reqs1}")
-    println(s"reqs2: ${reqs2}")
     (reqs1 ++ reqs2).foldLeft(start)((acc, strat) => {
       acc match {
         case Some(lst) => strat._2 match {
@@ -246,8 +297,7 @@ case class Infer(program: Program) {
   }
 
 
-
-  def collectRequirements(t: Term) : PermissionRequirements = {
+  def collectRequirements(t: Term): PermissionRequirements = {
     t match {
       case AddTerm(a, b, _) => {
         val reqA = collectRequirements(a)
@@ -258,7 +308,7 @@ case class Infer(program: Program) {
       case f@FieldAcc(v, _, _) => {
         collectRequirements(v).withField(f)
       }
-      case FracPerm(left, right, _) =>{
+      case FracPerm(left, right, _) => {
         val reqA = collectRequirements(left)
         val reqB = collectRequirements(right)
         reqA.merge(reqB)
@@ -272,13 +322,13 @@ case class Infer(program: Program) {
     }
   }
 
-  def applySteps(defs: Map[String, PredDef], ts: TermSub, tpt: TransparentPredicateTree, strategy: FoldingStrategy) : TransparentPredicateTree = {
+  def applySteps(location: Injection, defs: Map[String, PredDef], ts: TermSub, tpt: TransparentPredicateTree, strategy: FoldingStrategy): TransparentPredicateTree = {
     strategy.steps.foldLeft(tpt)((t, s) => {
       if (s.unfolding) {
-        t.unfold(defs, ts, s.pred.substitute(ts))
+        t.unfold(location, defs, ts, s.pred.substitute(ts))
       }
       else {
-        t.fold(defs, ts, s.pred.substitute(ts))
+        t.fold(location, defs, ts, s.pred.substitute(ts))
       }
     })
   }
@@ -296,7 +346,28 @@ case class Infer(program: Program) {
       println(s"EQUI: ${equi.map(_.pretty()).mkString(";")}")
       println("INST: " + elem.pretty())
       elem match {
-        case VarAssignLine(v, e) => {
+        case AssumeLine(pred, know) => {
+          val permissions = collectContainedPermissions(pred)
+          permissions.foreach({
+            case PredPredAcc(pi) => tpt = tpt.inhale(pi)
+            case PredFieldAcc(fa) => tpt = tpt.inhale(fa)
+            // TODO: implement assuming implication
+          })
+          knowledge = knowledge.extend(know)
+        }
+        case NonDetBranch(loc, first, second) => {
+          val resultFirst = processWithVals(defs, Sequence(Seq(first)), knowledge, tpt)
+          val resultSecond = processWithVals(defs, Sequence(Seq(second)), knowledge, tpt)
+
+          println(">>>>>")
+          println("TPT 1: " + resultFirst._2.pretty())
+          println("KB 1: " + resultFirst._1.pretty())
+
+          println("TPT 2: " + resultSecond._2.pretty())
+          println("KB 2: " + resultSecond._1.pretty())
+          println(">>>>>")
+        }
+        case VarAssignLine(loc, v, e) => {
           val renaming = Seq(Equivalence(v, Var("$v" + tempVarCounter, v.typ)))
           equi = equi ++ renaming
           tempVarCounter += 1
@@ -314,7 +385,7 @@ case class Infer(program: Program) {
           val valueStrat = getUnfoldingStrategiesForAllRequirements(searchDepth, ts, knowledge, tpt, defs, req)
           valueStrat match {
             case Some(value) => {
-              tpt = applySteps(defs, ts, tpt, value)
+              tpt = applySteps(loc, defs, ts, tpt, value)
             }
             case None => {
               println(s"Unable to find unfolding strategy for: ${elem.pretty()}")
@@ -329,10 +400,8 @@ case class Infer(program: Program) {
         }
         case InhaleLine(pred) => {
           var current = collectContainedPermissions(pred)
-          println(s"INHALING ALL: ${current.map(_.pretty()).mkString(";;")}")
           while (current != Set()) {
             val top = current.toSeq.head
-            println(s"TOP: ${top.pretty()}")
             current = current.diff(Set(top))
             top match {
               case PredImpl(cond, body) => {
@@ -369,7 +438,7 @@ case class Infer(program: Program) {
             }
           }
         }
-        case FieldAssignLine(v, e) => {
+        case FieldAssignLine(loc, v, e) => {
           val renaming = Seq(Equivalence(v, Var("$v" + tempVarCounter, v.typ)))
           equi = equi ++ renaming
           tempVarCounter += 1
@@ -399,7 +468,7 @@ case class Infer(program: Program) {
           val valueStrat = getUnfoldingStrategiesForAllRequirements(searchDepth, ts, knowledge, tpt, defs, req)
           valueStrat match {
             case Some(value) => {
-              tpt = applySteps(defs, ts, tpt, value)
+              tpt = applySteps(loc, defs, ts, tpt, value)
             }
             case None => {
               println(s"Unable to find unfolding strategy for: ${elem.pretty()}")
@@ -409,7 +478,7 @@ case class Infer(program: Program) {
           val destStrat = tpt.findUnfoldingStrategyForDirect(defs, ts, knowledge, v, searchDepth)
           destStrat match {
             case Some(value) => {
-              tpt = applySteps(defs, ts, tpt, value)
+              tpt = applySteps(loc, defs, ts, tpt, value)
             }
             case None => {
               println(s"Unable to find unfolding strategy for: ${elem.pretty()}")
@@ -418,7 +487,7 @@ case class Infer(program: Program) {
           println(s"HAVING EQUIVALENCE: ${v} == ${e}")
           //Equivalence(v, e)
         }
-        case ExhaleLine(pred) => {
+        case ExhaleLine(loc, pred) => {
           val ts = TermSub(equi.map(v => (v.a, v.b)).toMap)
           val subbedPred = pred.substitute(ts)
           println(s"SUBBED PRED: ${subbedPred}")
@@ -442,7 +511,7 @@ case class Infer(program: Program) {
               case PredPredAcc(pi) => {
                 tpt.findRefoldingStrategy(defs, ts, knowledge, pi, searchDepth) match {
                   case Some(value) => {
-                    tpt = applySteps(defs, ts, tpt, value)
+                    tpt = applySteps(loc, defs, ts, tpt, value)
                   }
                   case None => {
                     // TODO: report error / collect errors
@@ -463,21 +532,86 @@ case class Infer(program: Program) {
     (knowledge, tpt)
   }
 
+  def collectFoldingStoryFor(foldingStory: Seq[(Stmt, FoldingStep)], stmt: Stmt): Seq[FoldingStep] = {
+    foldingStory.filter(v => v._1.equals(stmt))
+      .map(_._2)
+  }
+
+  def termToExp(term: Term): Exp = {
+    term match {
+      case AddTerm(a, b, _) => Add(termToExp(a), termToExp(b))()
+      case BoolTerm(value, _) => if (value) TrueLit()() else FalseLit()()
+      case FieldAcc(v, field, typ) => FieldAccess(termToExp(v), Field(field, typ)())()
+      case FracPerm(left, right, _) => FractionalPerm(termToExp(left), termToExp(right))()
+      case IntTerm(value, _) => IntLit(value)()
+      case NullTerm(_) => NullLit()()
+      case Var(name, typ) => LocalVar(name, typ)()
+      case _ => {
+        throw new IllegalArgumentException(s"Unable to convert term ${term.getClass.getName} to exp!")
+      }
+    }
+  }
+
+  def wrapWithFoldingStory(foldingStory: Seq[(Injection, FoldingStep)], stmt: Stmt): Stmt = {
+    val story = collectFoldingStoryFor(foldingStory, stmt)
+      .map(s => {
+        val args = s.pred.values.map(t => termToExp(t))
+        val predAcc = PredicateAccess(args, s.pred.name)()
+        val pap = PredicateAccessPredicate(predAcc, None)()
+        // TODO: extend with permission amount
+        if (s.unfolding) Unfold(pap)() else Fold(pap)()
+      })
+
+    Seqn(story, Seq())()
+  }
+
+  def injectFoldingStory(foldingStory: Seq[(Injection, FoldingStep)], stmt: Stmt): Stmt = {
+    stmt match {
+      case i: Injection => wrapWithFoldingStory(foldingStory, i)
+      case s: Seqn => {
+        val injected = s.ss.map(s => injectFoldingStory(foldingStory, s))
+        Seqn(injected, s.scopedSeqnDeclarations)(s.pos, s.info, s.errT)
+      }
+      case s@If(cond, thn, els) => {
+        val mappedThn = injectFoldingStory(foldingStory, thn).asInstanceOf[Seqn]
+        val mappedEls = injectFoldingStory(foldingStory, els).asInstanceOf[Seqn]
+        If(cond, mappedThn, mappedEls)(s.pos, s.info, s.errT)
+      }
+      // TODO: extend for while stmt
+//      case e => {
+//        throw new IllegalArgumentException(s"Unable to inject folding story into ${e.getClass.getName}")
+//      }
+      case s => s
+    }
+  }
+
   def translateMethodToInternalForm(defs: Map[String, PredDef], method: Method): Unit = {
     println(s"METHOD: ${method.name}")
-    val mappedBody = method.body.map(v => {
+    val mappedBody = method.body.map((methBody: Seqn) => {
+
       val inhaling = Sequence(method.pres.map(expToPredTerm)
         .map(v => InhaleLine(v)))
+
+      val lastInj = freshInjection()
+
       val exhaling = Sequence(method.posts.map(expToPredTerm)
-        .map(v => ExhaleLine(v))
+        .map(v => ExhaleLine(lastInj, v))
         .reverse)
 
-      val body = transformSeqnToInternalForm(defs, v)
-      val joined = inhaling.join(body).join(exhaling)
+      val transformRes = transformSeqnToInternalForm(defs, methBody)
+      val joined = inhaling.join(transformRes._2).join(exhaling)
       println("::::::::::::: LINES :::::::::::::::::")
       println(joined.pretty(4))
       println(":::::::::::::::::::::::::::::::::::::")
-      processsssss(defs, joined)
+      val foldingStory = processsssss(defs, joined)
+      println("::::::::::::: FOLDING STORY :::::::::::::::::")
+      foldingStory.foreach(e => println(s"${e._1} :> ${if (e._2.unfolding) "unfolding" else "folding"} ${e._2.pred.pretty()}"))
+      println(":::::::::::::::::::::::::::::::::::::::::::::")
+      val extendedBody = Seqn(Seq(transformRes._1, lastInj), Seq())()
+      val injected = injectFoldingStory(foldingStory, extendedBody)
+      println("::::::::::::::::: INJECTED :::::::::::::::::::")
+      println(s"${injected.toString()}")
+      println("::::::::::::::::::::::::::::::::::::::::::::::")
       joined
     })
   }

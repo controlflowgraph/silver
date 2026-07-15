@@ -9,9 +9,15 @@ trait Knowledge {
   def substitute(ts: TermSub): Knowledge
 
   def pretty() : String
+
+  def negate(): Knowledge
 }
 
 case class IsNull(e: Term) extends Knowledge {
+
+  def negate(): Knowledge = {
+    IsNonNull(this.e)
+  }
 
   def substitute(ts: TermSub): Knowledge = {
     IsNull(this.e.substitute(ts))
@@ -23,6 +29,10 @@ case class IsNull(e: Term) extends Knowledge {
 }
 
 case class IsNonNull(e: Term) extends Knowledge {
+
+  def negate(): Knowledge = {
+    IsNull(this.e)
+  }
 
   def substitute(ts: TermSub): Knowledge = {
     IsNonNull(this.e.substitute(ts))
