@@ -283,7 +283,7 @@ case class Infer(program: Program) {
     })
   }
 
-  def processWithVals(defs: Map[String, PredDef], seq: Sequence, initKB: KnowledgeBase, predTree: TransparentPredicateTree): Unit = {
+  def processWithVals(defs: Map[String, PredDef], seq: Sequence, initKB: KnowledgeBase, predTree: TransparentPredicateTree): (KnowledgeBase, TransparentPredicateTree) = {
     var knowledge = initKB
     var tpt = predTree
     var equi = Seq[Equivalence]()
@@ -317,15 +317,22 @@ case class Infer(program: Program) {
               tpt = applySteps(defs, ts, tpt, value)
             }
             case None => {
-              println(s"Unable to find unfolding strategy for: ${elem}")
+              println(s"Unable to find unfolding strategy for: ${elem.pretty()}")
             }
           }
         }
-        case seq: Sequence => processWithVals(defs, seq, knowledge, tpt)
+        case seq: Sequence => {
+
+          val result = processWithVals(defs, seq, knowledge, tpt)
+          knowledge = result._1
+          tpt = result._2
+        }
         case InhaleLine(pred) => {
           var current = collectContainedPermissions(pred)
+          println(s"INHALING ALL: ${current.map(_.pretty()).mkString(";;")}")
           while (current != Set()) {
             val top = current.toSeq.head
+            println(s"TOP: ${top.pretty()}")
             current = current.diff(Set(top))
             top match {
               case PredImpl(cond, body) => {
@@ -395,7 +402,7 @@ case class Infer(program: Program) {
               tpt = applySteps(defs, ts, tpt, value)
             }
             case None => {
-              println(s"Unable to find unfolding strategy for: ${elem}")
+              println(s"Unable to find unfolding strategy for: ${elem.pretty()}")
             }
           }
 
@@ -405,7 +412,7 @@ case class Infer(program: Program) {
               tpt = applySteps(defs, ts, tpt, value)
             }
             case None => {
-              println(s"Unable to find unfolding strategy for: ${elem}")
+              println(s"Unable to find unfolding strategy for: ${elem.pretty()}")
             }
           }
           println(s"HAVING EQUIVALENCE: ${v} == ${e}")
@@ -453,6 +460,7 @@ case class Infer(program: Program) {
         }
       }
     }
+    (knowledge, tpt)
   }
 
   def translateMethodToInternalForm(defs: Map[String, PredDef], method: Method): Unit = {
