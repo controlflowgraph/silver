@@ -11,21 +11,17 @@ import viper.silver.plugin.standard.termination.{PDecreasesClause, PDecreasesSta
 
 object ParameterSubstitutor {
   def processParametersExp(exp: PExp, ts: PTypeSubstitution): PExp = {
-    println(s"processing ${exp.pretty}")
     val res = exp match {
       case assertion: PAccAssertion => assertion match {
         case p@PPredCall(idnref, typVars, callArgs) => {
-          println(s"PreadCall here....")
           val updatedArgs = callArgs.update(callArgs.inner.toSeq.map(e => processParametersExp(e, ts)))
           PPredCall(idnref, typVars, updatedArgs)(p.pos)
         }
         case p@PCall(idnref, callArgs, typeAnnotated) => {
-          println(s"PCall here....")
           val updatedArgs = callArgs.update(callArgs.inner.toSeq.map(e => processParametersExp(e, ts)))
           PCall(idnref, updatedArgs, typeAnnotated)(p.pos)
         }
         case p@PAccPred(op, amount) => {
-          println(s"PAccPred here.... ${amount}")
           val internal: PMaybePairArgument[PLocationAccess, PExp] = PMaybePairArgument(
             processParametersLocationAccess(amount.inner.first, ts),
             amount.inner.second.map(a => (a._1, processParametersExp(a._2, ts))))(amount.inner.pos)
@@ -76,13 +72,10 @@ object ParameterSubstitutor {
         val copiedRef = copyWithDecl(idnref)
         p.decl.map(d => processParametersTypedVarDecl(d, ts))
           .foreach(a => {
-            println(s"COPIED REF: ${copiedRef}")
-            println(s"ADDING NEW DECLARATION TO THE REFERENCE: ${a}")
             copiedRef.newDecl(a)
           })
         val const = PIdnUseExp(copiedRef)
         const.typ = p.typ.substitute(ts)
-        println(s"TYPE AFTER COPY: ${const.typ}")
         const
       }
       case p@PLet(l, variable, eq, exp, in, nestedScope) => {

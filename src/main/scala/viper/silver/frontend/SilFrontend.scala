@@ -266,9 +266,7 @@ trait SilFrontend extends DefaultFrontend {
   override def inference(): Unit = {
     _program match {
       case Some(value) => {
-        println("HERRRE::::::::::::::::::::::::::::::::::::::::::::::")
-        PermissionInference(value).process()
-        println("HERRRE::::::::::::::::::::::::::::::::::::::::::::::")
+        _program = PermissionInference.process(value)
       }
       case None =>
     }
@@ -402,10 +400,7 @@ trait SilFrontend extends DefaultFrontend {
           FrontendStateCache.translator = translator
           translator.translate match {
             case Some(program) =>{
-              println("§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§")
-              println("successful translation")
               println(program.toString())
-              println("§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§")
               Succ(program)
             }
 
@@ -425,23 +420,6 @@ trait SilFrontend extends DefaultFrontend {
         println("::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::")
         println(e.toString)
         e.getStackTrace.toList.take(100).foreach(println)
-//        println(e.getStackTrace.toList.head)
-//        println(e.getStackTrace.toList.tail.head)
-//        println(e.getStackTrace.toList.tail.tail.head)
-//        println(e.getStackTrace.toList.tail.tail.tail.head)
-//        println(e.getStackTrace.toList.tail.tail.tail.tail.head)
-//        println(e.getStackTrace.toList.tail.tail.tail.tail.tail.head)
-//        println(e.getStackTrace.toList.tail.tail.tail.tail.tail.tail.head)
-//        println(e.getStackTrace.toList.tail.tail.tail.tail.tail.tail.tail.head)
-//        println(e.getStackTrace.toList.tail.tail.tail.tail.tail.tail.tail.tail.head)
-//        println(e.getStackTrace.toList.tail.tail.tail.tail.tail.tail.tail.tail.tail.head)
-//        println(e.getStackTrace.toList.tail.tail.tail.tail.tail.tail.tail.tail.tail.tail.head)
-//        println(e.getStackTrace.toList.tail.tail.tail.tail.tail.tail.tail.tail.tail.tail.tail.head)
-//        println(e.getStackTrace.toList.tail.tail.tail.tail.tail.tail.tail.tail.tail.tail.tail.tail.head)
-//        println(e.getStackTrace.toList.tail.tail.tail.tail.tail.tail.tail.tail.tail.tail.tail.tail.tail.head)
-//        println(e.getStackTrace.toList.tail.tail.tail.tail.tail.tail.tail.tail.tail.tail.tail.tail.tail.tail.head)
-//        println(e.getStackTrace.toList.tail.tail.tail.tail.tail.tail.tail.tail.tail.tail.tail.tail.tail.tail.tail.head)
-//        println(e.getStackTrace.toList.tail.tail.tail.tail.tail.tail.tail.tail.tail.tail.tail.tail.tail.tail.tail.tail.head)
         println("::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::")
         println("::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::")
         throw new IllegalStateException("AHHH")

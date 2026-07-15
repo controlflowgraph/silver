@@ -935,7 +935,7 @@ case class TypeChecker(program: PProgram, names: NameAnalyser) {
                       checkInternal(ca)
                     }))
                     // TODO CFG: check that the predicate correctly refers to a predicate
-                    println("CHECKING THE PC!!!!!!!")
+//                    println("CHECKING THE PC!!!!!!!")
                     //check(pc.typ)
 //                    val pred: PPredicate = pc.idnref.decl.get.asInstanceOf[PPredicate]
 //                    pc.params.foreach(v => v.inner.toSeq.foreach(t => {
@@ -946,10 +946,10 @@ case class TypeChecker(program: PProgram, names: NameAnalyser) {
 //                        check(i._2, i._1.typ)
 //                      })
 //                    pc.params.map(v => v.update(v.inner.toSeq.map(t => GenericParameterInstantiationHelper.processParametersType(t))))
-                    println("resolving the pred call")
-                    println(s"PredCall: ${pc}")
-                    println(s"tv -> ${pc.params.map(v => v.inner.toSeq).getOrElse(Nil)}")
-                    println(s"args -> ${pc.callArgs.inner.toSeq}")
+//                    println("resolving the pred call")
+//                    println(s"PredCall: ${pc}")
+//                    println(s"tv -> ${pc.params.map(v => v.inner.toSeq).getOrElse(Nil)}")
+//                    println(s"args -> ${pc.callArgs.inner.toSeq}")
                     pc.typ = Predicate
                   }
                   case loc =>

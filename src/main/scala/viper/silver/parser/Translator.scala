@@ -254,7 +254,7 @@ case class Translator(program: PProgram) {
 
     prepareDatatypeTemplates(pdatatypes)
     prepareMethodTemplates(pmethods)
-    println("prepared templates")
+//    println("prepared templates")
 
     /* [2022-03-14 Alessandro] Domain signatures need no be translated first, since signatures of other declarations
       * like domain functions, and ordinary functions might depend on the domain signature. Especially this is the case
@@ -269,7 +269,7 @@ case class Translator(program: PProgram) {
       */
     pdomains flatMap (_.funcs) foreach translateMemberSignature
     (pfields ++ pfunctions ++ ppredicates) foreach translateMemberSignature
-    println("translated signatures")
+//    println("translated signatures")
 
     /* [2022-03-14 Alessandro] After the signatures are translated, the actual full translations can be done
       * independently of each other.
@@ -281,10 +281,10 @@ case class Translator(program: PProgram) {
     val predicates = (ppredicates map translate) ++ extensions filter (t => t.isInstanceOf[Predicate])
     val datatypes = (pdatatypes map translate)
 
-    println("translated everything except methods")
+//    println("translated everything except methods")
 
     val methods = (pmethods map translate) ++ extensions filter (t => t.isInstanceOf[Method])
-    println("translated methods")
+//    println("translated methods")
 //    val methods = (pmethods ++ extensions filter (t => t.isInstanceOf[Method])).filter(m => m.typVars.map(v => v.inner.toSeq.length).getOrElse(0) == 0) (pmethods map translate) ++ extensions filter (t => t.isInstanceOf[Method])
     //methods.head.asInstanceOf[Method].body.map(b => b.)
 
@@ -310,16 +310,16 @@ case class Translator(program: PProgram) {
             functions.asInstanceOf[Seq[Function]], filteredPredicates, filteredMethods,
                 (extensions filter (t => t.isInstanceOf[ExtensionMember])).asInstanceOf[Seq[ExtensionMember]])(program))
 
-    println("METHODS:")
-    filteredMethods.foreach(m => println(m.name, m.pres))
+//    println("METHODS:")
+//    filteredMethods.foreach(m => println(m.name, m.pres))
 
     finalProgram.deepCollect {
       case fp: ForPerm => Consistency.checkForPermArguments(fp, finalProgram)
       case trig: Trigger => Consistency.checkTriggers(trig, finalProgram)
     }
 
-    println("FIELDS:")
-    filteredFields.foreach(println)
+//    println("FIELDS:")
+//    filteredFields.foreach(println)
 
     if (Consistency.messages.isEmpty) Some(finalProgram) // all error messages generated during translation should be Consistency messages
     else None
@@ -439,8 +439,6 @@ case class Translator(program: PProgram) {
   private def findDomain(id: PIdentifier) = members(id.name).asInstanceOf[Domain]
   private def findField(id: PIdentifier) = members(id.name).asInstanceOf[Field]
   private def findDatatypeField(typ: Type, id: PIdentifier) = {
-    println(s"FINDING THEEEEEEE DATATYPE FIELD: ${typ}")
-    println(s"RESULT: ${members(encodeTypeAsString(typ) + "$$$" + id.name)}")
     members(encodeTypeAsString(typ) + "$$$" + id.name).asInstanceOf[Field]
   }
   private def findFunction(id: PIdentifier) = members(id.name).asInstanceOf[Function]
@@ -481,7 +479,7 @@ case class Translator(program: PProgram) {
     // TODO CFG: add recursive permission equalities
     val fieldAccesses = anding(dt.content.map(f => {
       val fieldName = dtPrefix + "$$$" + f.name.replaceFirst(".*\\$", "")
-      val predAccess = FieldAccess(LocalVar("this", Ref)(), Field(fieldName, Ref)())()
+      val predAccess = FieldAccess(LocalVar("this", Ref)(), Field(fieldName, convertToViperType(f.typ))())()
       val permExp = Some(FractionalPerm(IntLit(1)(), IntLit(1)())())
       FieldAccessPredicate(predAccess, permExp)()
     }))
@@ -490,12 +488,12 @@ case class Translator(program: PProgram) {
 
   def substituteTypeParameters(d: DatatypeType) : Datatype = {
     val temp = getDatatypeTemplate(d.genericName)
-    println(s"SUBS: ${temp.generics.zip(d.typeArguments)}")
     val replacement = temp.generics.map(g => TypeVar(g)).zip(d.typeArguments).toMap
+    val fields = temp.fields.map(f => DatatypeField(f._1, f._2.substitute(replacement))())
     Datatype(
       temp.name,
       Seq(),
-      temp.fields.map(f => DatatypeField(f._1, f._2.substitute(replacement))())
+      fields
     )()
   }
 
@@ -511,9 +509,8 @@ case class Translator(program: PProgram) {
     val encodedSignature = encodeTypeAsString(typ)
     instantiated.content.map(f => {
       val fieldName = encodedSignature + "$$$" + f.name.replaceFirst(".*\\$", "")
-      println(s"creating field: ${fieldName}")
-      println(s"TYPE OF FIELD: ${f.typ} ${f.typ.getClass}")
-      Field(fieldName, convertToViperType(f.typ))()
+      val afterConversion = convertToViperType(f.typ)
+      Field(fieldName, afterConversion)()
     })
   }
 
@@ -533,7 +530,6 @@ case class Translator(program: PProgram) {
   def generateDatatypePredicate(typ: Type, instantiated: Datatype) : Predicate = {
     val encodedSignature = encodeTypeAsString(typ)
     val body = generatePredicateContent(typ, encodedSignature, instantiated)
-    println(s"HAS RECURSIVE FIELD: ${instantiated.content.find(f => f.typ == typ).isDefined}")
     Predicate(
       encodedSignature,
       Seq(LocalVarDecl("this", Ref)()),
@@ -667,7 +663,6 @@ case class Translator(program: PProgram) {
 
   def instantiateDatatypeTemplate(typ: Type) = {
     // TODO CFG: ADD METHOD TO MAKE AN INSTANCE WHICH IS A STUB WITH NO BODY
-    println(s">>>>>> instantiating ${typ}")
     typ match {
       case d: DatatypeType => {
         if(!(instantiatedDatatypes.contains(typ))){
@@ -688,11 +683,11 @@ case class Translator(program: PProgram) {
           addMember(method)
           addMember(predicate)
 
-          println("PREDICATE:")
-          println(predicate.toString())
-
-          println("METHOD:")
-          println(method.toString())
+//          println("PREDICATE:")
+//          println(predicate.toString())
+//
+//          println("METHOD:")
+//          println(method.toString())
         }
       }
       case _ =>
@@ -700,11 +695,11 @@ case class Translator(program: PProgram) {
   }
 
   def instantiateMethodTemplate(methodName: String, args: Seq[PType]): Unit = {
-    println(s"instantiating method ${methodName} with ${args}")
+//    println(s"instantiating method ${methodName} with ${args}")
     val temp = getMethodTemplate(methodName)
     val error = (node: PNode) => (msg: String) => {}
     val result = Unification.findUnificationForArgs(error, temp.ref, temp.ref.args.inner.toSeq.map(a => a.typ).zip(args))
-    println(s"UNIFICATION RESULT: ${result}")
+//    println(s"UNIFICATION RESULT: ${result}")
     // instantiating the datatype instances of the arguments
     args.foreach(a => {
       instantiateDatatypeTemplate(ttyp(a))
@@ -721,9 +716,9 @@ case class Translator(program: PProgram) {
 
     val substitution = PTypeSubstitution(map)
 
-    println(")))))))))))))))))))))))))))")
-    println(s"SUB: ${substitution}")
-    println(")))))))))))))))))))))))))))")
+//    println(")))))))))))))))))))))))))))")
+//    println(s"SUB: ${substitution}")
+//    println(")))))))))))))))))))))))))))")
 
     // usually use a deep copy
     val adjustedBody = temp.ref.body.map(b => ParameterSubstitutor.processParametersSeqn(b, substitution))
@@ -771,7 +766,7 @@ case class Translator(program: PProgram) {
         instantiateMethodTemplate(method.name, args.inner.toSeq.map(e => e.typ))
         val methodName = method.name + "$" + encodeTypeListAsString(args.inner.toSeq.map(e => e.typ).map(ttyp))
         val foundMethod = members(methodName).asInstanceOf[Method]
-        println(s"calling method: ${methodName}")
+//        println(s"calling method: ${methodName}")
         methodCallAssign(s, targets.toSeq, ts => MethodCall(foundMethod, args.inner.toSeq map exp, ts)(pos, info))
       }
       case PAssign(targets, _, PMakeExp(_, typ, args)) => {
@@ -791,12 +786,12 @@ case class Translator(program: PProgram) {
 
         */
         //methodCallAssign(s, Seq(targets.head), ts => MakeStmt(ts.head, ttyp(typ), args.inner.toSeq map exp)(pos, info))
-        println("targets:")
-        targets.toSeq.foreach(t => {
-          println(t, t.typ)
+//        println("targets:")
+//        targets.toSeq.foreach(t => {
+//          println(t, t.typ)
           // TODO: figure out how to adjust the types of the targets to match the viper encoding types
           //t.typ = convertToViperType(ttyp(t.typ))
-        })
+//        })
 
         methodCallAssign(s, targets.toSeq, ts => {
           val instantiated = instantiatedDatatypes(translatedType)
@@ -821,16 +816,16 @@ case class Translator(program: PProgram) {
         LocalVarAssign(LocalVar(idnuse.name, ttyp(idnuse.decl.get.asInstanceOf[PAssignableVarDecl].typ))(pos, SourcePNodeInfo(idnuse)), exp(rhs))(pos, info)
       case a@PAssign(PDelimited(field: PFieldAccess), _, rhs) =>{
         if(isDatatype(field.rcv.typ)) {
-          println(s"FINDING DATATYPE FIELD: ${field.rcv.typ} -> ${field.idnref.name}")
+//          println(s"FINDING DATATYPE FIELD: ${field.rcv.typ} -> ${field.idnref.name}")
           val resultingField = findDatatypeField(ttyp(field.rcv.typ), field.idnref)
           println(resultingField)
           val transformedRHS = exp(rhs)
-          println(s"TRANS RHS: ${transformedRHS}     ${transformedRHS.typ}")
+//          println(s"TRANS RHS: ${transformedRHS}     ${transformedRHS.typ}")
           FieldAssign(FieldAccess(exp(field.rcv), resultingField)(field, SourcePNodeInfo(field)), transformedRHS)(pos, info)
         }
         else {
           // TODO CFG: select the field with the given type associated :)
-          println(s"FINDING FIELD: ${field.rcv.typ} -> ${field.idnref.name} ${a.pretty}")
+//          println(s"FINDING FIELD: ${field.rcv.typ} -> ${field.idnref.name} ${a.pretty}")
           FieldAssign(FieldAccess(exp(field.rcv), findField(field.idnref))(field, SourcePNodeInfo(field)), exp(rhs))(pos, info)
         }
       }
@@ -921,8 +916,8 @@ case class Translator(program: PProgram) {
       case _ => sys.error(s"Found invalid target of assignment")
     }
 
-    println(s"TS: ${ts}")
-    println(s"ASSIGN: ${assign}")
+//    println(s"TS: ${ts}")
+//    println(s"ASSIGN: ${assign}")
     val assn = assign(ts.map(_._2))
     val tmps = ts.flatMap(_._1)
     if (tmps.isEmpty)
@@ -1130,19 +1125,19 @@ case class Translator(program: PProgram) {
           params.map(v => v.inner.toSeq)
           .map(v => v.map(ttyp))
           .getOrElse(Nil))}"
-        println(s"CONV NAME: ${convName}")
+//        println(s"CONV NAME: ${convName}")
         PredicateAccess(mappedArgs, convName)(pos=p.pos._1, info=NoInfo, errT = NoTrafos)
       }
       case PFieldAccess(rcv, _, idn) =>{
         if(isDatatype(rcv.typ)) {
           val translatedType = ttyp(rcv.typ)
           instantiateDatatypeTemplate(translatedType)
-          println(s"FINDING DATATYPE FIELD FOR ACCESS: ${translatedType} -> ${idn.name}")
+//          println(s"FINDING DATATYPE FIELD FOR ACCESS: ${translatedType} -> ${idn.name}")
           FieldAccess(exp(rcv), findDatatypeField(translatedType, idn))(pos, info)
         }
         else {
           // TODO CFG: select the field with the given type associated :)
-          println(s"FINDING FIELD: ${rcv.typ} -> ${idn.name}")
+//          println(s"FINDING FIELD: ${rcv.typ} -> ${idn.name}")
           FieldAccess(exp(rcv), findField(idn))(pos, info)
         }
       }

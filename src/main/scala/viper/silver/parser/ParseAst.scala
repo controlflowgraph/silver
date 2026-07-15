@@ -742,7 +742,7 @@ object GenericParameterInstantiationHelper {
         PMakeExp(keyword, updatedType, updatedArgs)(p.pos)
       }
       case p@PPredCall(idnref, params, callArgs) => {
-        println(s"PROCESSING PREDICATE CALL: ${p.pretty}")
+//        println(s"PROCESSING PREDICATE CALL: ${p.pretty}")
         val updatedParams: Option[PGrouped[PSym.Bracket, PDelimited[PType, PReserved[PSym.Comma.type]]]] = params match {
           case Some(value) => {
             val result = value.update(value.inner.toSeq.map(v => processParametersType(v, generics)))
@@ -754,28 +754,28 @@ object GenericParameterInstantiationHelper {
         PPredCall(idnref, updatedParams, updatedArgs)(p.pos)
       }
       case e => {
-        println(s"UNKNOWN APPLICATION: ${e}")
+//        println(s"UNKNOWN APPLICATION: ${e}")
         throw new IllegalArgumentException(s"Unknown application expression to process generic parameters! ${e.pretty}")
       }
     }
   }
 
   def processParametersExp(exp: PExp, generics: Set[String]): PExp = {
-    println(s"processing ${exp.pretty}")
+//    println(s"processing ${exp.pretty}")
     exp match {
       case assertion: PAccAssertion => assertion match {
         case p@PPredCall(idnref, typVars, callArgs) => {
-          println(s"PreadCall here....")
+//          println(s"PreadCall here....")
           val updatedArgs = callArgs.update(callArgs.inner.toSeq.map(e => processParametersExp(e, generics)))
           PPredCall(idnref, typVars, updatedArgs)(p.pos)
         }
         case p@PCall(idnref, callArgs, typeAnnotated) => {
-          println(s"PCall here....")
+//          println(s"PCall here....")
           val updatedArgs = callArgs.update(callArgs.inner.toSeq.map(e => processParametersExp(e, generics)))
           PCall(idnref, updatedArgs, typeAnnotated)(p.pos)
         }
         case p@PAccPred(op, amount) => {
-          println(s"PAccPred here.... ${amount}")
+//          println(s"PAccPred here.... ${amount}")
           val internal: PMaybePairArgument[PLocationAccess, PExp] = PMaybePairArgument(
             processParametersLocationAccess(amount.inner.first, generics),
             amount.inner.second.map(a => (a._1, processParametersExp(a._2, generics))))(amount.inner.pos)
