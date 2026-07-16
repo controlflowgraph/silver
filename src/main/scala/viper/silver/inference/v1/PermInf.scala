@@ -196,7 +196,7 @@ case class PermInf(program: Program) {
             val finalFold = FoldingStrategy(Seq(FoldingStep(unfolding = false, desiredPredicate)))
             val merged = (strategies ++ endingFolding ++ Seq(finalFold))
               .foldLeft(FoldingStrategy(Seq()))((a, b) => a.merge(b))
-            println(merged.pretty())
+//            println(merged.pretty())
             Some(merged)
           }
           else {

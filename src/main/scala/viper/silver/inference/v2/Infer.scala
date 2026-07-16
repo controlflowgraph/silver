@@ -11,6 +11,7 @@ case class Infer(program: Program) {
 
   def expToTerm(exp: Exp): Term = {
     exp match {
+      case NullLit() => NullTerm(exp.typ)
       case LocalVar(name, typ) => Var(name, typ)
       case IntLit(value) => IntTerm(value, exp.typ)
       case FractionalPerm(left, right) => FracPerm(
@@ -340,11 +341,11 @@ case class Infer(program: Program) {
     var tempVarCounter = 0
 
     for (elem <- seq.lines) {
-      println("")
-      println("TPT: " + tpt.pretty())
-      println("KB: " + knowledge.pretty())
-      println(s"EQUI: ${equi.map(_.pretty()).mkString(";")}")
-      println("INST: " + elem.pretty())
+//      println("")
+//      println("TPT: " + tpt.pretty())
+//      println("KB: " + knowledge.pretty())
+//      println(s"EQUI: ${equi.map(_.pretty()).mkString(";")}")
+//      println("INST: " + elem.pretty())
       elem match {
         case AssumeLine(pred, know) => {
           val permissions = collectContainedPermissions(pred)
@@ -366,6 +367,17 @@ case class Infer(program: Program) {
           println("TPT 2: " + resultSecond._2.pretty())
           println("KB 2: " + resultSecond._1.pretty())
           println(">>>>>")
+          // TODO:
+          //  unrestricted access to permissions that both sides have
+          //  evening procedure that will fold the field permissions of the respected sides to more combined predicate permissions
+
+          val foldingStory = tpt.foldingStory ++ resultFirst._2.foldingStory ++ resultSecond._2.foldingStory
+
+          // TODO: REWORK THIS
+          val direct = resultFirst._2.direct.intersect(resultSecond._2.direct)
+          val folded = resultFirst._2.folded.intersect(resultSecond._2.folded)
+
+          tpt = TransparentPredicateTree(foldingStory, direct, folded)
         }
         case VarAssignLine(loc, v, e) => {
           val renaming = Seq(Equivalence(v, Var("$v" + tempVarCounter, v.typ)))
@@ -408,11 +420,11 @@ case class Infer(program: Program) {
                 val contained = collectContainedPermissions(body)
                 contained.foreach {
                   case PredFieldAcc(fa) => {
-                    println(s"ADDING GUARDED F ACC: ${cond.map(_.pretty()).mkString(" & ")} => ${fa.pretty()}")
+//                    println(s"ADDING GUARDED F ACC: ${cond.map(_.pretty()).mkString(" & ")} => ${fa.pretty()}")
                     tpt = tpt.inhale(cond, fa)
                   }
                   case PredPredAcc(pi) => {
-                    println(s"ADDING GUARDED P INST: ${cond.map(_.pretty()).mkString(" & ")} => ${pi.pretty()}")
+//                    println(s"ADDING GUARDED P INST: ${cond.map(_.pretty()).mkString(" & ")} => ${pi.pretty()}")
                     tpt = tpt.inhale(cond, pi)
                   }
                   case p => {
@@ -484,15 +496,15 @@ case class Infer(program: Program) {
               println(s"Unable to find unfolding strategy for: ${elem.pretty()}")
             }
           }
-          println(s"HAVING EQUIVALENCE: ${v} == ${e}")
+//          println(s"HAVING EQUIVALENCE: ${v} == ${e}")
           //Equivalence(v, e)
         }
         case ExhaleLine(loc, pred) => {
           val ts = TermSub(equi.map(v => (v.a, v.b)).toMap)
           val subbedPred = pred.substitute(ts)
-          println(s"SUBBED PRED: ${subbedPred}")
+//          println(s"SUBBED PRED: ${subbedPred}")
           var current = collectContainedPermissions(subbedPred)
-          println(s"CONTAINED PERMISSIONS: ${current}")
+//          println(s"CONTAINED PERMISSIONS: ${current}")
           while (current != Set()) {
             val top = current.toSeq.head
             current = current.diff(Set(top))
@@ -585,7 +597,9 @@ case class Infer(program: Program) {
     }
   }
 
-  def translateMethodToInternalForm(defs: Map[String, PredDef], method: Method): Unit = {
+  
+
+  def inferPermissionStory(defs: Map[String, PredDef], method: Method): Method = {
     println(s"METHOD: ${method.name}")
     val mappedBody = method.body.map((methBody: Seqn) => {
 
@@ -604,23 +618,45 @@ case class Infer(program: Program) {
       println(joined.pretty(4))
       println(":::::::::::::::::::::::::::::::::::::")
       val foldingStory = processsssss(defs, joined)
-      println("::::::::::::: FOLDING STORY :::::::::::::::::")
-      foldingStory.foreach(e => println(s"${e._1} :> ${if (e._2.unfolding) "unfolding" else "folding"} ${e._2.pred.pretty()}"))
-      println(":::::::::::::::::::::::::::::::::::::::::::::")
+//      println("::::::::::::: FOLDING STORY :::::::::::::::::")
+//      foldingStory.foreach(e => println(s"${e._1} :> ${if (e._2.unfolding) "unfolding" else "folding"} ${e._2.pred.pretty()}"))
+//      println(":::::::::::::::::::::::::::::::::::::::::::::")
       val extendedBody = Seqn(Seq(transformRes._1, lastInj), Seq())()
       val injected = injectFoldingStory(foldingStory, extendedBody)
       println("::::::::::::::::: INJECTED :::::::::::::::::::")
       println(s"${injected.toString()}")
       println("::::::::::::::::::::::::::::::::::::::::::::::")
-      joined
+      injected.asInstanceOf[Seqn]
     })
+
+    Method(
+      method.name,
+      method.formalArgs,
+      method.formalReturns,
+      method.pres,
+      method.posts,
+      mappedBody
+    )(method.pos, method.info, method.errT)
   }
 
   def process(): Option[Program] = {
     val defs = PredDefConstructor.constructPredicateDefs(this.program)
 
-    val translatedMethods = this.program.methods.map(m => translateMethodToInternalForm(defs, m))
+    val translatedMethods = this.program.methods.map(m => inferPermissionStory(defs, m))
+
+    println("================================================================")
+    translatedMethods.foreach(m => {
+      println(m.toString())
+      println("-----")
+    })
     println("FINISHED INFERING")
-    None
+    Some(Program(
+      this.program.domains,
+      this.program.fields,
+      this.program.functions,
+      this.program.predicates,
+      translatedMethods,
+      this.program.extensions
+    )(this.program.pos, this.program.info, this.program.errT))
   }
 }

@@ -454,10 +454,20 @@ case class TypeChecker(program: PProgram, names: NameAnalyser) {
   def acceptNonAbstractPredicateAccess(exp: PExp, messageIfAbstractPredicate: String): Unit = {
     val call = exp match {
       case acc: PAccPred if acc.loc.isInstanceOf[PCall] => acc.loc.asInstanceOf[PCall]
+      case acc: PAccPred if acc.loc.isInstanceOf[PPredCall] => {
+        // TODO: verify that the pred call actually exists
+        acc.loc.asInstanceOf[PPredCall]
+        return
+      }
+
+      case acc: PAccPred => {
+        messages ++= FastMessaging.message(exp, s"expected predicate access ${exp.getClass.getName} ${acc.loc.getClass.getName}")
+        return
+      }
       case call: PCall => call
 
       case _ =>
-        messages ++= FastMessaging.message(exp, "expected predicate access")
+        messages ++= FastMessaging.message(exp, s"expected predicate access ${exp.getClass.getName}")
         return
     }
     if (call.idnref.decls.isEmpty)

@@ -124,9 +124,9 @@ case class TransparentPredicateTree(foldingStory: Seq[(Injection, FoldingStep)],
                   val inst = VariableInstantiation(predDef.params.zip(pred.values).toMap)
                   val resBefore = predDef.body.instantiate(inst)
                   val res = resBefore.substitute(ts)
-                  println(s"sub unfolding of ${pred.pretty()} requires:")
-                  res.direct.foreach(r => println(s"\tfield: { ${formatKnowledgeSet(r._1)} } ${r._2.pretty()}"))
-                  res.folded.foreach(r => println(s"\tpred: { ${formatKnowledgeSet(r._1)} } ${r._2.pretty()}"))
+//                  println(s"sub unfolding of ${pred.pretty()} requires:")
+//                  res.direct.foreach(r => println(s"\tfield: { ${formatKnowledgeSet(r._1)} } ${r._2.pretty()}"))
+//                  res.folded.foreach(r => println(s"\tpred: { ${formatKnowledgeSet(r._1)} } ${r._2.pretty()}"))
                   remainingDirect = remainingDirect.union(res.direct)
                   remainingFolded = remainingFolded.union(res.folded.map(v => (v._1, v._2, remDepth - 1)))
                   endingFolding = Seq(FoldingStrategy(Seq(FoldingStep(unfolding = false, pred)))) ++ endingFolding
@@ -141,15 +141,17 @@ case class TransparentPredicateTree(foldingStory: Seq[(Injection, FoldingStep)],
         //          println("unfolding strategies:")
         //          strategies.foreach(e => println(e))
         //          println()
-        println(s"---------------------- unfolding failures [${failures.size}] ----------------------")
-        failures.foreach(e => println(e))
-        println(s"----------------------------------------------${"-" * ("" + failures.size).length}----------------------")
+        if(!failures.isEmpty){
+          println(s"---------------------- unfolding failures [${failures.size}] ----------------------")
+          failures.foreach(e => println(e))
+          println(s"----------------------------------------------${"-" * ("" + failures.size).length}----------------------")
+        }
 
         if (failures.isEmpty) {
           val finalFold = FoldingStrategy(Seq(FoldingStep(unfolding = false, desiredPredicate)))
           val merged = (strategies ++ endingFolding ++ Seq(finalFold))
             .foldLeft(FoldingStrategy(Seq()))((a, b) => a.merge(b))
-          println(merged.pretty())
+//          println(merged.pretty())
           Some(merged)
         }
         else {
@@ -168,7 +170,7 @@ case class TransparentPredicateTree(foldingStory: Seq[(Injection, FoldingStep)],
   }
 
   def unfold(location: Injection, defs: Map[String, PredDef], ts: TermSub, pred: PredInstance): TransparentPredicateTree = {
-    println(s">>> UNFOLDING: ${pred}")
+//    println(s">>> UNFOLDING: ${pred}")
     val predDef = defs(pred.name)
     val inst = VariableInstantiation(predDef.params.zip(pred.values).toMap)
     val instBody = predDef.body
@@ -182,7 +184,7 @@ case class TransparentPredicateTree(foldingStory: Seq[(Injection, FoldingStep)],
   }
 
   def fold(location: Injection, defs: Map[String, PredDef], ts: TermSub, pred: PredInstance): TransparentPredicateTree = {
-    println(s">>> FOLDING: ${pred}")
+//    println(s">>> FOLDING: ${pred}")
     val predDef = defs(pred.name)
     val inst = VariableInstantiation(predDef.params.zip(pred.values).toMap)
     val instBody = predDef.body
@@ -258,26 +260,26 @@ case class TransparentPredicateTree(foldingStory: Seq[(Injection, FoldingStep)],
   }
 
   def exhale(acc: FieldAcc): TransparentPredicateTree = {
-    println(s"exhaling: ${acc.pretty()}")
+//    println(s"exhaling: ${acc.pretty()}")
     TransparentPredicateTree(this.foldingStory, this.direct.filter(t => !(t._2.equals(acc))), this.folded)
   }
 
   def exhale(pred: PredInstance): TransparentPredicateTree = {
-    println(s"exhaling: ${pred.pretty()}")
+//    println(s"exhaling: ${pred.pretty()}")
     TransparentPredicateTree(this.foldingStory, this.direct, this.folded.filter(t => !(t._2.equals(pred))))
   }
 
   def inhale(acc: FieldAcc): TransparentPredicateTree = this.inhale(Set(), acc)
 
   def inhale(knowledge: Set[Knowledge], acc: FieldAcc): TransparentPredicateTree = {
-    println(s"inhaling: ${acc.pretty()}")
+//    println(s"inhaling: ${acc.pretty()}")
     TransparentPredicateTree(this.foldingStory, this.direct.union(Set((knowledge, acc))), this.folded)
   }
 
   def inhale(pred: PredInstance): TransparentPredicateTree = this.inhale(Set(), pred)
 
   def inhale(knowledge: Set[Knowledge], pred: PredInstance): TransparentPredicateTree = {
-    println(s"inhaling: ${pred.pretty()}")
+//    println(s"inhaling: ${pred.pretty()}")
     TransparentPredicateTree(this.foldingStory, this.direct, this.folded.union(Set((knowledge, pred))))
   }
 

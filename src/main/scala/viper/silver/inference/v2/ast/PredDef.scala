@@ -103,11 +103,39 @@ object PredDefConstructor {
     println(s"program predicates: ${
       program.predicates
     }")
-    program.predicates.flatMap(p => p.body.map(v => (p.name, p.formalArgs.map(f => f.name), v))).map(p => {
+    program.predicates.flatMap(p => p.body.map(v => (p.name, p.formalArgs.map(f => f.name), v))).flatMap(p => {
         println(p._3)
         val tpt = collectTPTContent(p._3)
-        (p._1, PredDef(p._1, p._2, tpt))
+        val extendedName = p._1 + "$$_$$$$_"
+        Seq(
+          (p._1, PredDef(p._1, p._2, tpt)),
+          (extendedName, PredDef(extendedName, p._2, tpt))
+        )
       })
       .toMap
   }
+
+  // TODO: generate lemma which specifies what parts did not function
+  //       -> lemma inference is then the required solution
+  //       -> output for the user
+  //    entailments for separation logic fragments which might fit -> literature
+
+
+  // TODO: implement havocs
+  // TODO: add a while loop construct line for the fixpoint computation
+  // TODO: rename the nondet to if then else
+
+  // TODO: maybe transform into specific single assignment form?
+  // TODO: invariants for loops ==> k induction
+  //       -> generalization of loop iterations
+  //       -> works for complete lattices
+  //       -> lattice k induction with an application to probabilistic programs
+
+
+  // IDEA: placeholder abstract predicate with abstract methods to transform the predicate into the desired permissions
+  //       -> find which transformation is the best/right one
+  // --> make a simple example on which to use
+  // TODO: add mechanism for bi abduction to specify the holes that are missing
+
+  // TODO: track errors when inferring the permission story
 }
