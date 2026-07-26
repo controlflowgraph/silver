@@ -57,7 +57,7 @@ trait Frontend {
 
   /** Execute all phases of the frontend sequentially. */
   def runAllPhases(): Unit = {
-    println(s"MY PHASES: ${phases.map(_.name)}")
+    println(s"MY PHASES 123: ${phases.map(_.name)}")
     println(getClass.getName)
     phases.foreach(ph => {
       println(s"RUNNING PHASE: ${ph.name}")
@@ -120,7 +120,7 @@ trait DefaultPhases extends Frontend {
   val Inference     = Phase("Inference",      inference _)
   val Verification     = Phase("Verification",      verification _)
 
-  val phases = Seq(Parsing, SemanticAnalysis, Translation, ConsistencyCheck, Inference, Verification)
+  val phases = Seq(Parsing, SemanticAnalysis, Translation, ConsistencyCheck, Inference)
 
   /** Parse the program. */
   def parsing(): Unit

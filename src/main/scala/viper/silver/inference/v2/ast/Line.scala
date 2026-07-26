@@ -49,7 +49,7 @@ case class AssertLine(location: Injection, pred: PredTerm) extends Line {
 
 case class NonDetBranch(location: Injection, first: Line, second: Line) extends Line {
   def pretty(indent: Int): String = {
-    s"${" " * indent}{\n${this.first.pretty(indent + 4)}\n${" " * indent}} [] {\n${this.second.pretty(indent + 4)}${" " * indent}}"
+    s"${" " * indent}{\n${this.first.pretty(indent + 4)}\n${" " * indent}} [] {\n${this.second.pretty(indent + 4)}\n${" " * indent}}"
   }
 }
 

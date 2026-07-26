@@ -100,10 +100,13 @@ case class Translator(program: PProgram) {
 //  }
 
   def encodeTypeListAsString(typ: Seq[Type]): String = {
-    val joined = typ.map(encodeTypeAsString)
-      .reduceOption((a, b) => a + "$$$_" + b)
-      .getOrElse("")
-    s"${"$$_"}${joined}${"$$$$_"}"
+    if(typ.isEmpty) ""
+    else {
+      val joined = typ.map(encodeTypeAsString)
+        .reduceOption((a, b) => a + "$$$_" + b)
+        .getOrElse("")
+      s"${"$$_"}${joined}${"$$$$_"}"
+    }
   }
 
   def getMethodTemplate(name: String): MethodTemplate = {

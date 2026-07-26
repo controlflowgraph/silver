@@ -62,6 +62,10 @@ class ViperAstProvider(override val reporter: Reporter,
 
   override def result: VerificationResult = {
 
+    println("%" * 100)
+    println(_errors)
+    println(_program.isDefined)
+    println("%" * 100)
     if (_errors.isEmpty && _program.isDefined) {
       require(state >= DefaultStates.ConsistencyCheck)
       Success

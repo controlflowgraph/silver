@@ -264,11 +264,15 @@ trait SilFrontend extends DefaultFrontend {
   }
 
   override def inference(): Unit = {
-    _program match {
-      case Some(value) => {
-        _program = PermissionInference.process(value)
+    if(_errors.isEmpty) {
+      _program match {
+        case Some(value) => {
+          println("RUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUN")
+          _program = PermissionInference.process(value)
+          println(s"PROGRAM AFTER INFERENCE: ${_program}")
+        }
+        case None =>
       }
-      case None =>
     }
   }
 

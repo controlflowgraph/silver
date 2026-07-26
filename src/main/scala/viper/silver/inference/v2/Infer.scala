@@ -597,7 +597,7 @@ case class Infer(program: Program) {
     }
   }
 
-  
+
 
   def inferPermissionStory(defs: Map[String, PredDef], method: Method): Method = {
     println(s"METHOD: ${method.name}")
@@ -639,17 +639,45 @@ case class Infer(program: Program) {
     )(method.pos, method.info, method.errT)
   }
 
+  def flattenSeqStructure(seq: Sequence): Sequence = {
+    var queue: Seq[Line] = seq.lines
+    var flattened: Seq[Line] = Seq()
+    while(queue.nonEmpty) {
+      val head: Line = queue.head
+      queue = queue.tail
+      head match {
+        case Sequence(sub) => queue = sub ++ queue
+        case e => flattened = flattened ++ Seq(flattenLineStructure(e))
+      }
+    }
+    Sequence(flattened)
+  }
+
+  def flattenLineStructure(line: Line) : Line = {
+    line match {
+      case NonDetBranch(location, first, second) =>
+        val firstFlattened = flattenLineStructure(first)
+        val secondFlattened = flattenLineStructure(second)
+        NonDetBranch(location, firstFlattened, secondFlattened)
+      case s: Sequence => flattenSeqStructure(s)
+      case e => e
+    }
+  }
+
   def process(): Option[Program] = {
     val defs = PredDefConstructor.constructPredicateDefs(this.program)
 
     val translatedMethods = this.program.methods.map(m => inferPermissionStory(defs, m))
 
-    println("================================================================")
-    translatedMethods.foreach(m => {
-      println(m.toString())
-      println("-----")
-    })
-    println("FINISHED INFERING")
+//    println("================================================================")
+//    translatedMethods.foreach(m => {
+//      println(m.toString())
+//      println("-----")
+//    })
+//    println("FINISHED INFERRING")
+
+    computeTraversals(this.program.predicates)
+
     Some(Program(
       this.program.domains,
       this.program.fields,
@@ -658,5 +686,128 @@ case class Infer(program: Program) {
       translatedMethods,
       this.program.extensions
     )(this.program.pos, this.program.info, this.program.errT))
+
+    None
+  }
+
+  def checkContainedRecursiveInstance(name: String, exp: Exp): Set[FieldAccess] = {
+    exp match {
+      case predicate: AccessPredicate => predicate match {
+//        case MagicWand(left, right) =>
+        case FieldAccessPredicate(loc, permExp) => Set()
+        case PredicateAccessPredicate(loc, permExp) => {
+          if(name == loc.predicateName){
+            // TODO: assumes single argument predicate -> requires main traversal argument
+            loc.args.toSet.filter(ex => ex.isInstanceOf[FieldAccess])
+              .map(ex => ex.asInstanceOf[FieldAccess])
+          } else {
+            Set()
+          }
+        }
+      }
+      // TODO: implication dictates conditionals for generated traversal/extraction function
+      case Implies(left, right) => checkContainedRecursiveInstance(name, right)
+      case LeCmp(a, b) => Set()
+//      case InhaleExhaleExp(in, ex) => ???
+//      case exp: PermExp => ???
+      case access: LocationAccess => Set()
+//      case access: ResourceAccess => ???
+//      case CondExp(cond, thn, els) => ???
+      case Unfolding(acc, body) => checkContainedRecursiveInstance(name, body)
+//      case Applying(wand, body) => ???
+//      case Asserting(a, body) => ???
+//      case Let(variable, exp, body) => ???
+//      case exp: QuantifiedExp => ???
+//      case ForPerm(variables, resource, body) => ???
+      case localVar: AbstractLocalVar => localVar match {
+        case LocalVar(name, typ) => Set()
+        case Result(typ) => Set()
+        case LocalVarWithVersion(name, typ) => Set()
+      }
+      case exp: SeqExp => Set()
+      case exp: SetExp => Set()
+      case exp: MultisetExp => Set()
+      case exp: MapExp => Set()
+      case literal: Literal => Set()
+//      case trigger: PossibleTrigger => ???
+//      case trigger: ForbiddenInTrigger => ???
+//      case app: FuncLikeApp => ???
+//      case exp: BinExp => ???
+//      case exp: UnExp => ???
+//      case lhs: Lhs => ???
+//      case exp: ExtensionExp => ???
+      case And(a, b) => {
+        val traversalA = checkContainedRecursiveInstance(name, a)
+        val traversalB = checkContainedRecursiveInstance(name, b)
+        traversalA.union(traversalB)
+      }
+    }
+  }
+
+  def hasTraversal(pred: Predicate) : Boolean = {
+    pred.body.exists(b => {
+      checkContainedRecursiveInstance(pred.name, b).nonEmpty
+    })
+  }
+
+  def computeTraversals(preds: Seq[Predicate]): Unit = {
+    preds.filter(pred => hasTraversal(pred))
+      .foreach(pred => {
+        val result = pred.body.map(b => checkContainedRecursiveInstance(pred.name, b)).getOrElse(Set())
+        println(s"${pred.name} has full traversal: ${result}")
+      })
   }
 }
+
+
+
+/*
+NOTES: 23.07.26
+
+look for fragments that are solvable:
+
+- strong separation logic paper (maybe) -> with magic wand and decidable
+
+- two variable separation logic and its inner circle
+   -> how small can a fragment get to still be undecidable
+
+
+
+
+- template for the quantified permissions
+- analyze laufvariables to guess what the templates should contain
+
+
+cgis -> counter example guided inductive synthesis
+- two variable types
+- variables that are constant but unknown
+- variables that are actually variable
+
+
+use simple functions first without mutual recursion
+- try to focus on requiring simple
+- make loops/mutual recursion as an addon
+
+
+
+
+
+idea: derive list segment like predicates -> from recursion in datatypes
+
+
+
+strong separation logic (ssl):
+  - how well does ssl deal with fractional permissions? still decidable?
+  - how easy is it to extend the algorithm with different/more general predicates?
+    -> how much does this impact the decidability
+
+counterexample guided inductive synthesis (cegis):
+  -
+
+syntax guided program synthesis (sygus):
+
+
+TODO: implement non deterministic join operation
+TODO: implement heuristic predicate selection (based on complexity or relevance)
+TODO: implement abduction procedure using predicate selection/abstraction
+*/
