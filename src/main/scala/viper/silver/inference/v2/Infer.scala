@@ -1110,7 +1110,7 @@ case class Infer(program: Program) {
 
   trait Requirement {}
 
-  case class MethCall(name: String, args: Seq[ObjIdent], res: Seq[ObjIdent]) extends Requirement {
+  case class MethCallReq(name: String, args: Seq[ObjIdent], res: Seq[ObjIdent]) extends Requirement {
 
   }
 
@@ -1130,6 +1130,10 @@ case class Infer(program: Program) {
   case class Structurer(condition: Seq[Exp], drift: Map[ObjIdent, ObjRef], assignment: Map[String, ObjIdent], var tempCounter: Int, structure: Set[(Seq[Exp], Requirement)]) {
 
     def this() = this(Seq(), Map(), Map(), 0, Set())
+
+    def addRequirement(req: Requirement): Structurer = {
+      Structurer(this.condition, this.drift, this.assignment, this.tempCounter, this.structure.union(Set((this.condition, req))))
+    }
 
     def initParameter(name: String): Structurer = {
       initDecl(name, original = true)
@@ -1312,15 +1316,31 @@ case class Infer(program: Program) {
       }
       case MethodCall(methodName, args, targets) => {
 
-        val arged = args.foldLeft(structs)((ss, a) => {
-          computeOutlineExp(ss, a).map(v => v._2)
+        val arged = args.foldLeft(structs.map(s => (s, Seq[ObjIdent]())))((ss, a) => {
+          ss.flatMap(s => {
+              computeOutlineExp(Seq(s._1), a)
+                .map(v => (v._2, s._2 ++ Seq(v._1)))
+            })
         })
-        // TODO: record the constraints regarding the fresh variables and the result of the method
-        targets.filter(t => t.typ.equals(Ref))
-          .foldLeft(arged)((arr, b) => arr.map(a => {
-            val freshed = a.freshObj()
-            freshed._2.performAssignment(b.name, Seq(), freshed._1)
-          }))
+        arged.flatMap(e => {
+          val strc = e._1
+          val ags = e._2
+          val targetResult = targets.foldLeft(Seq((strc, Seq[ObjIdent]())))((arr, b) => arr.map(agg => {
+              if(b.typ.equals(Ref)) {
+                val freshed = agg._1.freshObj()
+                val result = freshed._2.performAssignment(b.name, Seq(), freshed._1)
+                (result, agg._2 ++ Seq(freshed._1))
+              }
+            else{
+              (agg._1, agg._2 ++ Seq[ObjIdent](null))
+            }
+            }))
+
+          // COMBINE TO METHOD CALL REQUIREMENT WITH: ags
+          targetResult.map(vvv => {
+            vvv._1.addRequirement(MethCallReq(methodName, ags, vvv._2))
+          })
+        })
       }
       case Exhale(exp) => computeOutlineExp(structs, exp).map(v => v._2)
       case Inhale(exp) => computeOutlineExp(structs, exp).map(v => v._2)
