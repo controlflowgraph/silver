@@ -1,6 +1,6 @@
 package viper.silver.inference.v2.knowledge
 
-import viper.silver.ast.{Exp, NeCmp, NullLit}
+import viper.silver.ast.{EqCmp, Exp, NeCmp, NullLit}
 import viper.silver.inference.v2.ast.PredDefConstructor.expToTerm
 import viper.silver.inference.v2.ast.{FieldAcc, Term, TermSub, Var}
 
@@ -103,6 +103,9 @@ object Knowledge {
 
   def conditionToKnowledgeSet(e: Exp): Set[Knowledge] = {
     e match {
+      case EqCmp(NullLit(), v) => Set(IsNull(expToTerm(v)))
+      case EqCmp(v, NullLit()) => Set(IsNull(expToTerm(v)))
+      case EqCmp(_, _) => Set()
       case NeCmp(v, NullLit()) => Set(IsNonNull(expToTerm(v)))
       case NeCmp(NullLit(), v) => Set(IsNonNull(expToTerm(v)))
       case _ => {

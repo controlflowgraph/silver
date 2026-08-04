@@ -5,12 +5,18 @@ import viper.silver.inference.v2.ast._
 import viper.silver.inference.v2.knowledge.Knowledge.collectKnowledgeAboutTerm
 import viper.silver.inference.v2.knowledge.{Equivalence, IsNonNull, IsNull, Knowledge, KnowledgeBase, SAT}
 
+import java.util.Objects
+import scala.collection.immutable.HashMap
+import scala.collection.mutable
+
 case class Infer(program: Program) {
 
   val searchDepth = 10
 
   def expToTerm(exp: Exp): Term = {
     exp match {
+      case Add(a, b) => AddTerm(expToTerm(a), expToTerm(b), exp.typ)
+      case Sub(a, b) => SubTerm(expToTerm(a), expToTerm(b), exp.typ)
       case NullLit() => NullTerm(exp.typ)
       case LocalVar(name, typ) => Var(name, typ)
       case IntLit(value) => IntTerm(value, exp.typ)
@@ -52,6 +58,7 @@ case class Infer(program: Program) {
       case And(a, b) => {
         PredAnd(expToPredTerm(a), expToPredTerm(b))
       }
+      case _: EqCmp => PredTrue()
       case _: NeCmp => PredTrue()
       case _: LeCmp => PredTrue()
       case _: Unfolding => PredTrue()
@@ -305,6 +312,11 @@ case class Infer(program: Program) {
         val reqB = collectRequirements(b)
         reqA.merge(reqB)
       }
+      case SubTerm(a, b, _) => {
+        val reqA = collectRequirements(a)
+        val reqB = collectRequirements(b)
+        reqA.merge(reqB)
+      }
       case BoolTerm(_, _) => PermissionRequirements(Set(), Set())
       case f@FieldAcc(v, _, _) => {
         collectRequirements(v).withField(f)
@@ -341,18 +353,18 @@ case class Infer(program: Program) {
     var tempVarCounter = 0
 
     for (elem <- seq.lines) {
-//      println("")
-//      println("TPT: " + tpt.pretty())
-//      println("KB: " + knowledge.pretty())
-//      println(s"EQUI: ${equi.map(_.pretty()).mkString(";")}")
-//      println("INST: " + elem.pretty())
+      //      println("")
+      //      println("TPT: " + tpt.pretty())
+      //      println("KB: " + knowledge.pretty())
+      //      println(s"EQUI: ${equi.map(_.pretty()).mkString(";")}")
+      //      println("INST: " + elem.pretty())
       elem match {
         case AssumeLine(pred, know) => {
           val permissions = collectContainedPermissions(pred)
           permissions.foreach({
             case PredPredAcc(pi) => tpt = tpt.inhale(pi)
             case PredFieldAcc(fa) => tpt = tpt.inhale(fa)
-            // TODO: implement assuming implication
+              // TODO: implement assuming implication
           })
           knowledge = knowledge.extend(know)
         }
@@ -420,11 +432,11 @@ case class Infer(program: Program) {
                 val contained = collectContainedPermissions(body)
                 contained.foreach {
                   case PredFieldAcc(fa) => {
-//                    println(s"ADDING GUARDED F ACC: ${cond.map(_.pretty()).mkString(" & ")} => ${fa.pretty()}")
+                    //                    println(s"ADDING GUARDED F ACC: ${cond.map(_.pretty()).mkString(" & ")} => ${fa.pretty()}")
                     tpt = tpt.inhale(cond, fa)
                   }
                   case PredPredAcc(pi) => {
-//                    println(s"ADDING GUARDED P INST: ${cond.map(_.pretty()).mkString(" & ")} => ${pi.pretty()}")
+                    //                    println(s"ADDING GUARDED P INST: ${cond.map(_.pretty()).mkString(" & ")} => ${pi.pretty()}")
                     tpt = tpt.inhale(cond, pi)
                   }
                   case p => {
@@ -496,15 +508,15 @@ case class Infer(program: Program) {
               println(s"Unable to find unfolding strategy for: ${elem.pretty()}")
             }
           }
-//          println(s"HAVING EQUIVALENCE: ${v} == ${e}")
+          //          println(s"HAVING EQUIVALENCE: ${v} == ${e}")
           //Equivalence(v, e)
         }
         case ExhaleLine(loc, pred) => {
           val ts = TermSub(equi.map(v => (v.a, v.b)).toMap)
           val subbedPred = pred.substitute(ts)
-//          println(s"SUBBED PRED: ${subbedPred}")
+          //          println(s"SUBBED PRED: ${subbedPred}")
           var current = collectContainedPermissions(subbedPred)
-//          println(s"CONTAINED PERMISSIONS: ${current}")
+          //          println(s"CONTAINED PERMISSIONS: ${current}")
           while (current != Set()) {
             val top = current.toSeq.head
             current = current.diff(Set(top))
@@ -589,14 +601,13 @@ case class Infer(program: Program) {
         val mappedEls = injectFoldingStory(foldingStory, els).asInstanceOf[Seqn]
         If(cond, mappedThn, mappedEls)(s.pos, s.info, s.errT)
       }
-      // TODO: extend for while stmt
-//      case e => {
-//        throw new IllegalArgumentException(s"Unable to inject folding story into ${e.getClass.getName}")
-//      }
+        // TODO: extend for while stmt
+        //      case e => {
+        //        throw new IllegalArgumentException(s"Unable to inject folding story into ${e.getClass.getName}")
+        //      }
       case s => s
     }
   }
-
 
 
   def inferPermissionStory(defs: Map[String, PredDef], method: Method): Method = {
@@ -618,9 +629,9 @@ case class Infer(program: Program) {
       println(joined.pretty(4))
       println(":::::::::::::::::::::::::::::::::::::")
       val foldingStory = processsssss(defs, joined)
-//      println("::::::::::::: FOLDING STORY :::::::::::::::::")
-//      foldingStory.foreach(e => println(s"${e._1} :> ${if (e._2.unfolding) "unfolding" else "folding"} ${e._2.pred.pretty()}"))
-//      println(":::::::::::::::::::::::::::::::::::::::::::::")
+      //      println("::::::::::::: FOLDING STORY :::::::::::::::::")
+      //      foldingStory.foreach(e => println(s"${e._1} :> ${if (e._2.unfolding) "unfolding" else "folding"} ${e._2.pred.pretty()}"))
+      //      println(":::::::::::::::::::::::::::::::::::::::::::::")
       val extendedBody = Seqn(Seq(transformRes._1, lastInj), Seq())()
       val injected = injectFoldingStory(foldingStory, extendedBody)
       println("::::::::::::::::: INJECTED :::::::::::::::::::")
@@ -642,7 +653,7 @@ case class Infer(program: Program) {
   def flattenSeqStructure(seq: Sequence): Sequence = {
     var queue: Seq[Line] = seq.lines
     var flattened: Seq[Line] = Seq()
-    while(queue.nonEmpty) {
+    while (queue.nonEmpty) {
       val head: Line = queue.head
       queue = queue.tail
       head match {
@@ -653,7 +664,7 @@ case class Infer(program: Program) {
     Sequence(flattened)
   }
 
-  def flattenLineStructure(line: Line) : Line = {
+  def flattenLineStructure(line: Line): Line = {
     line match {
       case NonDetBranch(location, first, second) =>
         val firstFlattened = flattenLineStructure(first)
@@ -665,18 +676,44 @@ case class Infer(program: Program) {
   }
 
   def process(): Option[Program] = {
+
+    println("================================================================")
+    println("================================================================")
+    println("================================================================")
+    computeTraversals(this.program.predicates)
+
+    val mutating = computeMethodMutation(this.program.methods)
+
+    this.program.methods
+      .filter(m => !mutating.contains(m.name))
+      .map(n => (n.name, computeFunctionalRepresentation(n)))
+      .foreach(p => {
+        println(s"METHOD ${p._1} MAPPED TO FUNCTION:")
+        println(p._2)
+        val mapped = p._2.flatMap(b => b.body.map(a => computeFunctionBaseCases(a, Set(b.name))))
+        println(s"Base cases: ${mapped}")
+      })
+
+    println("================================================================")
+    this.program.methods.foreach(n => {
+      println(s"METHOD OUTLINE COMPUTE: ${n.name}")
+      computeOutline(n);
+    })
+
+    println("================================================================")
+    println("================================================================")
+    println("================================================================")
+
     val defs = PredDefConstructor.constructPredicateDefs(this.program)
 
     val translatedMethods = this.program.methods.map(m => inferPermissionStory(defs, m))
 
-//    println("================================================================")
-//    translatedMethods.foreach(m => {
-//      println(m.toString())
-//      println("-----")
-//    })
-//    println("FINISHED INFERRING")
-
-    computeTraversals(this.program.predicates)
+    //    println("================================================================")
+    //    translatedMethods.foreach(m => {
+    //      println(m.toString())
+    //      println("-----")
+    //    })
+    //    println("FINISHED INFERRING")
 
     Some(Program(
       this.program.domains,
@@ -693,10 +730,10 @@ case class Infer(program: Program) {
   def checkContainedRecursiveInstance(name: String, exp: Exp): Set[FieldAccess] = {
     exp match {
       case predicate: AccessPredicate => predicate match {
-//        case MagicWand(left, right) =>
+        //        case MagicWand(left, right) =>
         case FieldAccessPredicate(loc, permExp) => Set()
         case PredicateAccessPredicate(loc, permExp) => {
-          if(name == loc.predicateName){
+          if (name == loc.predicateName) {
             // TODO: assumes single argument predicate -> requires main traversal argument
             loc.args.toSet.filter(ex => ex.isInstanceOf[FieldAccess])
               .map(ex => ex.asInstanceOf[FieldAccess])
@@ -705,20 +742,11 @@ case class Infer(program: Program) {
           }
         }
       }
-      // TODO: implication dictates conditionals for generated traversal/extraction function
+        // TODO: implication dictates conditionals for generated traversal/extraction function
       case Implies(left, right) => checkContainedRecursiveInstance(name, right)
       case LeCmp(a, b) => Set()
-//      case InhaleExhaleExp(in, ex) => ???
-//      case exp: PermExp => ???
       case access: LocationAccess => Set()
-//      case access: ResourceAccess => ???
-//      case CondExp(cond, thn, els) => ???
       case Unfolding(acc, body) => checkContainedRecursiveInstance(name, body)
-//      case Applying(wand, body) => ???
-//      case Asserting(a, body) => ???
-//      case Let(variable, exp, body) => ???
-//      case exp: QuantifiedExp => ???
-//      case ForPerm(variables, resource, body) => ???
       case localVar: AbstractLocalVar => localVar match {
         case LocalVar(name, typ) => Set()
         case Result(typ) => Set()
@@ -729,13 +757,6 @@ case class Infer(program: Program) {
       case exp: MultisetExp => Set()
       case exp: MapExp => Set()
       case literal: Literal => Set()
-//      case trigger: PossibleTrigger => ???
-//      case trigger: ForbiddenInTrigger => ???
-//      case app: FuncLikeApp => ???
-//      case exp: BinExp => ???
-//      case exp: UnExp => ???
-//      case lhs: Lhs => ???
-//      case exp: ExtensionExp => ???
       case And(a, b) => {
         val traversalA = checkContainedRecursiveInstance(name, a)
         val traversalB = checkContainedRecursiveInstance(name, b)
@@ -744,7 +765,7 @@ case class Infer(program: Program) {
     }
   }
 
-  def hasTraversal(pred: Predicate) : Boolean = {
+  def hasTraversal(pred: Predicate): Boolean = {
     pred.body.exists(b => {
       checkContainedRecursiveInstance(pred.name, b).nonEmpty
     })
@@ -757,8 +778,620 @@ case class Infer(program: Program) {
         println(s"${pred.name} has full traversal: ${result}")
       })
   }
-}
 
+  def computeMethodDependencies(stmt: Stmt): Set[String] = {
+    stmt match {
+      case NewStmt(lhs, fields) => Set()
+      case assign: AbstractAssign => Set()
+      case MethodCall(methodName, args, targets) => Set(methodName)
+      case Exhale(exp) => Set()
+      case Inhale(exp) => Set()
+      case Assert(exp) => Set()
+      case Assume(exp) => Set()
+      case Fold(acc) => Set()
+      case Unfold(acc) => Set()
+      case Package(wand, proofScript) => Set()
+      case Apply(exp) => Set()
+      case Seqn(ss, scopedSeqnDeclarations) => ss.flatMap(computeMethodDependencies).toSet
+      case If(cond, thn, els) => {
+        val a = computeMethodDependencies(thn)
+        val b = computeMethodDependencies(els)
+        a.union(b)
+      }
+      case Injection(id) => Set()
+      case While(cond, invs, body) => computeMethodDependencies(body)
+      case Label(name, invs) => Set()
+      case Goto(target) => Set()
+      case LocalVarDeclStmt(decl) => Set()
+      case Quasihavoc(lhs, exp) => Set()
+      case Quasihavocall(vars, lhs, exp) => Set()
+    }
+  }
+
+  /**
+   * Computes whether the method mutates state.
+   * This is done by checking if the method contains a field assignment.
+   * Local objects are included and not tracked separately.
+   *
+   * TODO: refine the tracking to reflect local variables better
+   */
+  def computeMutationState(stmt: Stmt): Boolean = {
+    stmt match {
+      case NewStmt(lhs, fields) => false
+      case assign: AbstractAssign => assign match {
+        case LocalVarAssign(lhs, rhs) => false
+        case FieldAssign(lhs, rhs) => true
+      }
+      case MethodCall(methodName, args, targets) => false
+      case Exhale(exp) => false
+      case Inhale(exp) => false
+      case Assert(exp) => false
+      case Assume(exp) => false
+      case Fold(acc) => false
+      case Unfold(acc) => false
+      case Package(wand, proofScript) => false
+      case Apply(exp) => false
+      case Seqn(ss, scopedSeqnDeclarations) => ss.exists(computeMutationState)
+      case If(cond, thn, els) => {
+        val a = computeMutationState(thn)
+        val b = computeMutationState(els)
+        a || b
+      }
+      case Injection(id) => false
+      case While(cond, invs, body) => computeMutationState(body)
+      case Label(name, invs) => false
+      case Goto(target) => false
+      case LocalVarDeclStmt(decl) => false
+      case Quasihavoc(lhs, exp) => false
+      case Quasihavocall(vars, lhs, exp) => false
+    }
+  }
+
+  def computeMethodDependencies(method: Method): Set[String] = {
+    method.body.map(computeMethodDependencies).getOrElse(Set())
+  }
+
+  def fixpoint[T](init: T, f: T => T): T = {
+    val applied = f(init)
+    if (init.equals(applied)) {
+      init
+    }
+    else {
+      fixpoint(applied, f)
+    }
+  }
+
+  def computeMethodMutation(methods: Seq[Method]): Set[String] = {
+    val current = methods.map(m => (m.name, computeMethodDependencies(m)))
+      .toMap
+
+    val mutatingMethods = methods.filter(m => m.body.exists(computeMutationState))
+      .map(m => m.name)
+      .toSet
+    println("mutating before:")
+    mutatingMethods.foreach(a => println(a))
+
+    val fp = fixpoint[Set[String]](
+      mutatingMethods,
+      state => current.filter(e => state.contains(e._1) || e._2.exists(d => state.contains(d))).keySet)
+
+
+    println("")
+    println("mutating after:")
+    fp.foreach(a => println(a))
+    fp
+  }
+
+  def computeExprRep(stmt: Stmt, resultVariable: String, recursive: String): Option[Exp] = {
+    stmt match {
+      case NewStmt(lhs, fields) => None
+      case assign: AbstractAssign => assign match {
+        case LocalVarAssign(lhs, rhs) =>
+          if (lhs.name.equals(resultVariable))
+            Some(rhs)
+          else None
+        case FieldAssign(lhs, rhs) => None
+      }
+      case c@MethodCall(methodName, args, targets) =>
+        if (methodName.equals(recursive))
+          Some(FuncApp("Func$" + recursive, args)(c.pos, c.info, targets.head.typ, c.errT))
+        else None
+      case Exhale(exp) => None
+      case Inhale(exp) => None
+      case Assert(exp) => None
+      case Assume(exp) => None
+        // TODO: maybe this part can be ignored instead of producing none result when doing the functionalization
+      case Fold(acc) => None
+      case Unfold(acc) => None
+      case Package(wand, proofScript) => None
+      case Apply(exp) => None
+      case Seqn(ss, scopedSeqnDeclarations) => {
+        if (ss.isEmpty) {
+          None
+        }
+        else if (ss.length == 1) {
+          computeExprRep(ss.last, resultVariable, recursive)
+        }
+        else {
+          // last statement in the sequence must be convertible
+          // all previous statements are assumed to be local assignments
+          // they are translated to let bindings
+          val prev = ss.dropRight(1)
+          val last: Option[Exp] = computeExprRep(prev.last, resultVariable, recursive)
+          prev.foldRight(last)((stmt, result) => result.flatMap(
+            m => {
+              stmt match {
+                case l@LocalVarAssign(lhs, rhs) => {
+                  Some(Let(LocalVarDecl(lhs.name, lhs.typ)(lhs.pos, lhs.info, lhs.errT),
+                    rhs,
+                    m
+                  )(l.pos, l.info, l.errT))
+                }
+                  // case Seqn(ss, scopedSeqnDeclarations) => TODO: allow nesting of sequences although this might not be relevant
+                  // case If(cond, thn, els) => TODO: potentially allow this if there is a usecase / valid mapping
+                case _ => None
+              }
+            }
+          ))
+        }
+      }
+      case i@If(cond, thn, els) => {
+        val expA = computeExprRep(thn, resultVariable, recursive)
+        val expB = computeExprRep(els, resultVariable, recursive)
+        (expA, expB) match {
+          case (Some(a), Some(b)) => Some(CondExp(cond, a, b)(i.pos, i.info, i.errT))
+          case _ => None
+        }
+      }
+      case Injection(id) => None
+      case While(cond, invs, body) => None
+      case Label(name, invs) => None
+      case Goto(target) => None
+      case LocalVarDeclStmt(decl) => None // TODO: check if this comes up and needs to be handled gracefully
+      case Quasihavoc(lhs, exp) => None
+      case Quasihavocall(vars, lhs, exp) => None
+      case stmt: ExtensionStmt => None
+    }
+  }
+
+  def containsRecursiveFunctionCall(exp: Exp, func: Set[String]): Boolean = {
+    // TODO: fix mutually recursive functions
+    exp match {
+      case predicate: AccessPredicate => predicate match {
+        case MagicWand(left, right) => containsRecursiveFunctionCall(left, func) || containsRecursiveFunctionCall(right, func)
+        case FieldAccessPredicate(loc, permExp) => containsRecursiveFunctionCall(loc, func) || permExp.exists(p => containsRecursiveFunctionCall(p, func))
+        case PredicateAccessPredicate(loc, permExp) => containsRecursiveFunctionCall(loc, func) || permExp.exists(p => containsRecursiveFunctionCall(p, func))
+      }
+      case InhaleExhaleExp(in, ex) => containsRecursiveFunctionCall(in, func) || containsRecursiveFunctionCall(ex, func)
+      case exp: PermExp => false // TODO: fix if perm exp could have rec func call
+      case access: LocationAccess => access match {
+        case FieldAccess(rcv, field) => containsRecursiveFunctionCall(rcv, func)
+        case PredicateAccess(args, predicateName) => args.exists(a => containsRecursiveFunctionCall(a, func))
+      }
+      case CondExp(cond, thn, els) => containsRecursiveFunctionCall(cond, func) || containsRecursiveFunctionCall(thn, func) || containsRecursiveFunctionCall(els, func)
+      case Unfolding(acc, body) => containsRecursiveFunctionCall(body, func)
+      case Applying(wand, body) => containsRecursiveFunctionCall(body, func)
+      case Asserting(a, body) => containsRecursiveFunctionCall(body, func)
+      case Let(variable, exp, body) => containsRecursiveFunctionCall(exp, func) || containsRecursiveFunctionCall(body, func)
+      case exp: QuantifiedExp => exp match {
+        case Forall(variables, triggers, exp) => containsRecursiveFunctionCall(exp, func)
+        case Exists(variables, triggers, exp) => containsRecursiveFunctionCall(exp, func)
+        case ForPerm(variables, resource, body) => containsRecursiveFunctionCall(body, func)
+      }
+      case ForPerm(variables, resource, body) => containsRecursiveFunctionCall(body, func)
+      case localVar: AbstractLocalVar => localVar match {
+        case LocalVar(name, typ) => false
+        case Result(typ) => false
+        case LocalVarWithVersion(name, typ) => false
+      }
+      case exp: SeqExp => exp match {
+        case EmptySeq(elemTyp) => false
+        case ExplicitSeq(elems) => elems.exists(e => containsRecursiveFunctionCall(e, func))
+        case RangeSeq(low, high) => containsRecursiveFunctionCall(low, func) || containsRecursiveFunctionCall(high, func)
+        case SeqAppend(left, right) => containsRecursiveFunctionCall(left, func) || containsRecursiveFunctionCall(right, func)
+        case SeqIndex(s, idx) => containsRecursiveFunctionCall(s, func) || containsRecursiveFunctionCall(idx, func)
+        case SeqTake(s, n) => containsRecursiveFunctionCall(s, func) || containsRecursiveFunctionCall(n, func)
+        case SeqDrop(s, n) => containsRecursiveFunctionCall(s, func) || containsRecursiveFunctionCall(n, func)
+        case SeqContains(elem, s) => containsRecursiveFunctionCall(elem, func) || containsRecursiveFunctionCall(s, func)
+        case SeqUpdate(s, idx, elem) => containsRecursiveFunctionCall(s, func) || containsRecursiveFunctionCall(idx, func) || containsRecursiveFunctionCall(elem, func)
+        case SeqLength(s) => containsRecursiveFunctionCall(s, func)
+      }
+      case exp: SetExp => exp match {
+        case exp: AnySetExp => exp match {
+          case exp: AnySetUnExp => exp.args.exists(a => containsRecursiveFunctionCall(a, func))
+          case exp: AnySetBinExp => exp.args.exists(a => containsRecursiveFunctionCall(a, func))
+          case MapDomain(base) => containsRecursiveFunctionCall(base, func)
+          case MapRange(base) => containsRecursiveFunctionCall(base, func)
+        }
+        case EmptySet(elemTyp) => false
+        case ExplicitSet(elems) => elems.exists(e => containsRecursiveFunctionCall(e, func))
+      }
+      case exp: MultisetExp => exp match {
+        case exp: AnySetExp => exp match {
+          case exp: AnySetUnExp => exp.args.exists(a => containsRecursiveFunctionCall(a, func))
+          case exp: AnySetBinExp => exp.args.exists(a => containsRecursiveFunctionCall(a, func))
+          case MapDomain(base) => containsRecursiveFunctionCall(base, func)
+          case MapRange(base) => containsRecursiveFunctionCall(base, func)
+        }
+        case EmptyMultiset(elemTyp) => false
+        case ExplicitMultiset(elems) => elems.exists(e => containsRecursiveFunctionCall(e, func))
+      }
+      case exp: MapExp => exp match {
+        case EmptyMap(keyType, valueType) => false
+        case ExplicitMap(elems) => elems.exists(e => containsRecursiveFunctionCall(e, func))
+        case Maplet(key, value) => containsRecursiveFunctionCall(key, func) || containsRecursiveFunctionCall(value, func)
+        case MapUpdate(base, key, value) => containsRecursiveFunctionCall(base, func) || containsRecursiveFunctionCall(key, func) || containsRecursiveFunctionCall(value, func)
+        case MapLookup(base, key) => containsRecursiveFunctionCall(base, func) || containsRecursiveFunctionCall(key, func)
+        case MapContains(key, base) => containsRecursiveFunctionCall(base, func) || containsRecursiveFunctionCall(key, func)
+        case MapCardinality(base) => containsRecursiveFunctionCall(base, func)
+      }
+      case literal: Literal => false
+      case DomainFuncApp(funcname, args, typVarMap) => func.contains(funcname) || args.exists(a => containsRecursiveFunctionCall(a, func))
+      case app: FuncLikeApp => app match {
+        case FuncApp(funcname, args) => func.contains(funcname) || args.exists(a => containsRecursiveFunctionCall(a, func))
+        case app: AbstractDomainFuncApp => app match {
+          case DomainFuncApp(funcname, args, typVarMap) => func.contains(funcname) || args.exists(a => containsRecursiveFunctionCall(a, func))
+          case BackendFuncApp(backendFuncName, args) => func.contains(backendFuncName) || args.exists(a => containsRecursiveFunctionCall(a, func))
+          case exp: DomainOpExp => exp match {
+            case exp: DomainBinExp => containsRecursiveFunctionCall(exp.left, func) || containsRecursiveFunctionCall(exp.right, func)
+            case exp: DomainUnExp => exp.args.exists(a => containsRecursiveFunctionCall(a, func))
+          }
+        }
+      }
+      case exp: BinExp => exp match {
+        case exp: AnySetBinExp => exp.args.exists(a => containsRecursiveFunctionCall(a, func))
+        case cmp: EqualityCmp => cmp.args.exists(a => containsRecursiveFunctionCall(a, func))
+      }
+      case exp: UnExp => exp match {
+        case exp: OldExp => exp match {
+          case Old(exp) => containsRecursiveFunctionCall(exp, func)
+          case LabelledOld(exp, oldLabel) => containsRecursiveFunctionCall(exp, func)
+          case DebugLabelledOld(exp, oldLabel) => containsRecursiveFunctionCall(exp, func)
+        }
+      }
+    }
+  }
+
+  def computeFunctionBaseCases(exp: Exp, func: Set[String]): Set[Exp] = {
+    if (!containsRecursiveFunctionCall(exp, func))
+      Set(exp)
+    else
+      exp match {
+        case access: LocationAccess => access match {
+          case FieldAccess(rcv, field) => Set(exp)
+          case _ => Set()
+        }
+          //        case access: ResourceAccess =>
+        case CondExp(cond, thn, els) =>
+          if (containsRecursiveFunctionCall(cond, func)) Set()
+          else computeFunctionBaseCases(thn, func).union(computeFunctionBaseCases(els, func))
+        case Let(variable, exp, body) =>
+          if (containsRecursiveFunctionCall(exp, func)) Set()
+          else computeFunctionBaseCases(body, func)
+          //        case exp: QuantifiedExp =>
+          //        case ForPerm(variables, resource, body) =>
+        case localVar: AbstractLocalVar => Set()
+        case exp: SeqExp => Set()
+        case exp: SetExp => Set()
+        case exp: MultisetExp => Set()
+        case exp: MapExp => Set()
+        case literal: Literal => Set()
+          //        case trigger: PossibleTrigger =>
+          //        case trigger: ForbiddenInTrigger =>
+        case FuncApp(funcname, args) => Set()
+        case exp: BinExp => Set() // TODO: maybe refine this if there is a use for different base cases
+        case exp: UnExp => Set() // TODO: maybe refine this if there is a use for different base cases
+          //        case lhs: Lhs =>
+          //        case exp: ExtensionExp =>
+      }
+  }
+
+  def computeFunctionalRepresentation(method: Method): Option[Function] = {
+    // FIND THE FUNCTIONS THAT RETURN A REF from a field
+    //    compute an additional function that returns the amount of permission from that field (if it exists)
+    //    ---> then generate the appropriate function
+    // THE FUNCTIONS THAT RETURN PRIMITIVE VALUES ARE IRRELEVANT SINCE THEIR VALUE CAN BE COPIED AND HAS NO ACCESS PERMISSIONS
+
+    if (method.formalReturns.length == 1 && method.formalReturns.head.typ.equals(Ref)) {
+      val firstReturn = method.formalReturns.head
+      val bodyExp = method.body.flatMap(b => computeExprRep(b, firstReturn.name, method.name))
+      // in the posts the resulting formal return needs to be replaced with result
+      bodyExp.map(b => Function(
+        "Func$" + method.name, method.formalArgs,
+        firstReturn.typ, method.pres,
+        method.posts, Some(b))
+      (method.pos, method.info, method.errT))
+    }
+    else {
+      println(s"Method ${method.name} does not have exactly 1 return!")
+      None
+    }
+  }
+
+  trait Requirement {}
+
+  case class MethCall(name: String, args: Seq[ObjIdent], res: Seq[ObjIdent]) extends Requirement {
+
+  }
+
+  case class HasField(source: ObjIdent, field: String, obj: ObjIdent) extends Requirement {
+
+  }
+
+  case class ObjRef(ident: ObjIdent, original: Boolean, fields: Map[String, ObjIdent]) {
+
+
+  }
+
+  case class ObjIdent(value: String) {
+    override def toString: String = s"'${this.value}"
+  }
+
+  case class Structurer(condition: Seq[Exp], drift: Map[ObjIdent, ObjRef], assignment: Map[String, ObjIdent], var tempCounter: Int, structure: Set[(Seq[Exp], Requirement)]) {
+
+    def this() = this(Seq(), Map(), Map(), 0, Set())
+
+    def initParameter(name: String): Structurer = {
+      initDecl(name, original = true)
+    }
+
+
+    def initVariable(name: String): Structurer = {
+      initDecl(name, original = false)
+    }
+
+    def getAssignmentRef(name: String): ObjIdent = {
+      this.assignment.getOrElse(name, null)
+    }
+
+    def initDecl(name: String, original: Boolean): Structurer = {
+      if (this.assignment.contains(name)) {
+        this
+      }
+      else {
+        val ident = freshTemp()
+        val or = ObjRef(ident, original, Map())
+        Structurer(this.condition, this.drift.updated(ident, or), this.assignment.updated(name, ident), this.tempCounter, this.structure)
+      }
+    }
+
+    def withCond(cond: Exp): Structurer = {
+      Structurer(this.condition ++ Seq(cond), this.drift, this.assignment, this.tempCounter, this.structure)
+    }
+
+    def resolveVariable(name: String): ObjIdent = {
+      this.assignment(name)
+    }
+
+    def freshTemp(): ObjIdent = {
+      val value = this.tempCounter
+      this.tempCounter += 1
+      ObjIdent(s"t${value}")
+    }
+
+    def freshObj(): (ObjIdent, Structurer) = {
+      val f = freshTemp()
+      val or = ObjRef(f, original = false, Map())
+      (f, Structurer(this.condition, this.drift.updated(f, or), this.assignment, this.tempCounter, this.structure))
+    }
+
+    def performAssignment(source: String, fields: Seq[String], value: ObjIdent): Structurer = {
+      if (fields.isEmpty) {
+        Structurer(this.condition, this.drift, this.assignment.updated(source, value), this.tempCounter, this.structure)
+      }
+      else {
+        var current = this.assignment(source)
+        var remFields = fields
+        while (remFields.length > 1) {
+          current = this.drift(current).fields(remFields.head)
+          remFields = remFields.tail
+        }
+        val oor = this.drift(current)
+        val uor = ObjRef(oor.ident, oor.original, oor.fields.updated(remFields.head, value))
+        Structurer(this.condition, this.drift.updated(current, uor), this.assignment, this.tempCounter, this.structure)
+      }
+    }
+
+    def resolveLookup(source: String, fields: Seq[String]): (ObjIdent, Structurer) = {
+      var struct: Structurer = this
+      var current = this.assignment(source)
+      var remFields = fields
+      while (remFields.nonEmpty) {
+        val res = struct.resolveField(current, remFields.head)
+        current = res._1
+        struct = res._2
+
+        remFields = remFields.tail
+      }
+
+      (current, struct)
+    }
+
+    def resolveField(obj: ObjIdent, field: String): (ObjIdent, Structurer) = {
+      // TODO: the lookup will propergate the original flag if the sub part has not been initialized yet
+      // TODO: the assignment does not translate the original flag since the value that is assigned is just copied
+      //        -> however the field lookup can still propergate the original flag
+      val or = this.drift(obj)
+      if (!or.fields.contains(field)) {
+        val oi = this.freshTemp()
+        val created = ObjRef(oi, or.original, Map())
+        val updated = ObjRef(or.ident, or.original, or.fields.updated(field, oi))
+        var updatedStructure = this.structure
+        if (or.original) {
+          updatedStructure = this.structure.union(Set((this.condition, HasField(obj, field, oi))))
+        }
+        (oi, Structurer(this.condition, this.drift.updated(obj, updated).updated(oi, created), this.assignment, this.tempCounter, updatedStructure))
+      }
+      else {
+        (or.fields(field), this)
+      }
+    }
+
+    def dump(): String = {
+      s"----------------\n\tassignment: ${this.assignment}\n\theap:\n${this.drift.values.map(v => "\t\t" + v.toString).mkString("\n")}\n\tinit-struct: \n${this.structure.map(v => "\t\t" + v._1.map(e => e.toString).mkString(" && ") + " =====> " + v._2).mkString("\n")}"
+    }
+  }
+
+  def extractFieldAssignTarget(fa: FieldAccess): (String, Seq[String]) = {
+    val base = fa.rcv match {
+      case lv: LocalVar => (lv.name, Seq())
+      case ff: FieldAccess => extractFieldAssignTarget(ff)
+      case _ => {
+        throw new IllegalArgumentException(s"Unexpected nesting of field assignment! ${fa.rcv.getClass.getName}")
+      }
+    }
+
+    (base._1, base._2 ++ Seq(fa.field.name))
+  }
+
+  def computeOutlineExp(structs: Seq[Structurer], exp: Exp): Seq[(ObjIdent, Structurer)] = {
+    exp match {
+      case lv: LocalVar => structs.map(s => (s.getAssignmentRef(lv.name), s))
+      case fa: FieldAccess => computeOutlineExp(structs, fa.rcv).map(v => {
+        val res = extractFieldAssignTarget(fa)
+        v._2.resolveLookup(res._1, res._2)
+      })
+      case lit: Literal => structs.map(s => (null, s))
+      case add: Add => add.args.foldLeft(structs)((ss, e) => computeOutlineExp(ss, e).map(v => v._2)).map(a => (null, a))
+      case sub: Sub => sub.args.foldLeft(structs)((ss, e) => computeOutlineExp(ss, e).map(v => v._2)).map(a => (null, a))
+//      case predicate: AccessPredicate => ???
+//      case InhaleExhaleExp(in, ex) => ???
+//      case exp: PermExp => ???
+//      case access: LocationAccess => ???
+//      case access: ResourceAccess => ???
+//      case CondExp(cond, thn, els) => ???
+//      case Unfolding(acc, body) => ???
+//      case Applying(wand, body) => ???
+//      case Asserting(a, body) => ???
+//      case Let(variable, exp, body) => ???
+//      case exp: QuantifiedExp => ???
+//      case ForPerm(variables, resource, body) => ???
+//      case localVar: AbstractLocalVar => ???
+//      case exp: SeqExp => ???
+//      case exp: SetExp => ???
+//      case exp: MultisetExp => ???
+//      case exp: MapExp => ???
+//      case literal: Literal => ???
+//      case trigger: PossibleTrigger => ???
+//      case trigger: ForbiddenInTrigger => ???
+//      case app: FuncLikeApp => ???
+//      case exp: BinExp => ???
+//      case exp: UnExp => ???
+//      case lhs: Lhs => ???
+//      case exp: ExtensionExp => ???
+    }
+  }
+
+  def computeOutlineStmt(structs: Seq[Structurer], stmt: Stmt): Seq[Structurer] = {
+    stmt match {
+      case NewStmt(lhs, fields) => {
+        structs.map(s => s.initVariable(lhs.name))
+          .map(s => {
+            val t = s.freshObj()
+            t._2.performAssignment(lhs.name, Seq(), t._1)
+          })
+      }
+        // TODO: maybe replace the original flag with a source field that indicates where the stuff is coming from
+        //       the parameters would get something like: METHODNAME$$$PARAMETERS
+        //       when calling another method and using the value that results from this afterward there is another flag like:
+        //           METHODNAME$$$CALL$$$0
+        //       the structure is then always recorded when adjusting the fields
+        //       these can later be collected to indicate which requirements exist for which method and at which call site
+        //       a new statement would also be a source of an object that can be checked later if the fields of the new stmt actually conform to the fields required
+        //       since the new statement would be "hard stop" this is a 100% an error that can be computed
+      case assign: AbstractAssign => assign match {
+        case LocalVarAssign(lhs, rhs) => {
+          val res = computeOutlineExp(structs, rhs)
+          res.map(r => r._2.performAssignment(lhs.name, Seq(), r._1))
+        }
+        case FieldAssign(lhs, rhs) => {
+          val base = extractFieldAssignTarget(lhs)
+          val res = computeOutlineExp(structs, rhs)
+          res.map(r => r._2.performAssignment(base._1, base._2, r._1))
+        }
+      }
+      case MethodCall(methodName, args, targets) => {
+
+        val arged = args.foldLeft(structs)((ss, a) => {
+          computeOutlineExp(ss, a).map(v => v._2)
+        })
+        // TODO: record the constraints regarding the fresh variables and the result of the method
+        targets.filter(t => t.typ.equals(Ref))
+          .foldLeft(arged)((arr, b) => arr.map(a => {
+            val freshed = a.freshObj()
+            freshed._2.performAssignment(b.name, Seq(), freshed._1)
+          }))
+      }
+      case Exhale(exp) => computeOutlineExp(structs, exp).map(v => v._2)
+      case Inhale(exp) => computeOutlineExp(structs, exp).map(v => v._2)
+      case Assert(exp) => computeOutlineExp(structs, exp).map(v => v._2)
+      case Assume(exp) => computeOutlineExp(structs, exp).map(v => v._2)
+      case Fold(acc) => ???
+      case Unfold(acc) => ???
+        //      case Package(wand, proofScript) => ???
+        //      case Apply(exp) => ???
+      case seqn@Seqn(ss, scopedSeqnDeclarations) => computeOutlineSeqn(structs, seqn)
+      case If(cond, thn, els) => {
+        val branchA = computeOutlineStmt(structs.map(s => s.withCond(cond)), thn)
+        val branchB = computeOutlineStmt(structs.map(s => s.withCond(Not(cond)())), els)
+        branchA ++ branchB
+      }
+        //      case Injection(id) => ???
+        //      case While(cond, invs, body) => ???
+        //      case Label(name, invs) => ???
+        //      case Goto(target) => ???
+        //      case LocalVarDeclStmt(decl) => ???
+        //      case Quasihavoc(lhs, exp) => ???
+        //      case Quasihavocall(vars, lhs, exp) => ???
+        //      case stmt: ExtensionStmt => ???
+    }
+  }
+
+
+  def computeOutlineSeqn(structs: Seq[Structurer], seqn: Seqn): Seq[Structurer] = {
+    seqn.ss.foldLeft(structs)((str, s) => {
+      computeOutlineStmt(str, s)
+    })
+  }
+
+  def computeOutline(method: Method): Unit = {
+    // for each function start with empty pres and empty posts
+    // iteratively go through each function.
+    //    collect the requirements from the call sites of the function (aka usages)
+    // pass through all statements with the new post conditions
+    // --> condense to some abstracted representation of what is required (e.g. read/write difference -> make it parameterized to change how the stuff is handled at each callsite)
+
+    //
+
+    val struct = method.formalArgs.filter(a => a.typ.equals(Ref))
+      .map(a => a.name)
+      .foldLeft(new Structurer())((s, p) => s.initParameter(p))
+
+    computeOutlineSeqn(Seq(struct), method.bodyOrAssumeFalse)
+      .foreach(s => {
+        println("-----")
+        println(s.dump())
+      })
+
+
+    //    val res0 = new Structurer()
+    //    val res1 = res0.initParameter("x")
+    //    val res2 = res1.resolveLookup("x", Seq("a", "b", "c"))._2
+    //    val res3 = res2.initVariable("y")
+    //    val res4 = res3.resolveLookup("y", Seq("z"))._2
+    //    val res5 = res3.performAssignment("x", Seq("a", "b"), res3.getAssignmentRef("y"))
+    //
+    //    println(s"RESULT FROM ASSIGNMENT:")
+    //    println(res0.dump())
+    //    println(res1.dump())
+    //    println(res2.dump())
+    //    println(res3.dump())
+    //    println(res4.dump())
+    //    println(res5.dump())
+
+    //    method.body.map(b => computeOutlineSeq(assignment, b))
+  }
+}
 
 
 /*

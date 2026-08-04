@@ -1,6 +1,6 @@
 package viper.silver.inference.v2.ast
 
-import viper.silver.ast.{AbstractLocalVar, AccessPredicate, And, Exp, FalseLit, FieldAccess, FieldAccessPredicate, FractionalPerm, Implies, IntLit, LeCmp, LocalVar, LocationAccess, PredicateAccessPredicate, Program, TrueLit}
+import viper.silver.ast.{AbstractLocalVar, AccessPredicate, Add, And, Exp, FalseLit, FieldAccess, FieldAccessPredicate, FractionalPerm, Implies, IntLit, LeCmp, LocalVar, LocationAccess, PredicateAccessPredicate, Program, Sub, TrueLit}
 import viper.silver.inference.v2.knowledge.{Knowledge, KnowledgeBase}
 import viper.silver.inference.v2.{PredInstance, TransparentPredicateTree}
 
@@ -78,6 +78,8 @@ object PredDefConstructor {
 
   def expToTerm(exp: Exp): Term = {
     exp match {
+      case Add(a, b) => AddTerm(expToTerm(a), expToTerm(b), exp.typ)
+      case Sub(a, b) => SubTerm(expToTerm(a), expToTerm(b), exp.typ)
       case p@LocalVar(name, _) => Var(name, p.typ)
       case p@FieldAccess(rcv, field) => FieldAcc(
         expToTerm(rcv),

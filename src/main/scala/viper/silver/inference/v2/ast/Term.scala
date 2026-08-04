@@ -68,6 +68,26 @@ case class AddTerm(a: Term, b: Term, typ: Type) extends Term {
   }
 }
 
+case class SubTerm(a: Term, b: Term, typ: Type) extends Term {
+  def pretty() : String = s"${this.a.pretty()} - ${this.b.pretty()}"
+
+  def substitute(es: TermSub): Term = {
+    es.apply(AddTerm(
+      this.a.substitute(es),
+      this.b.substitute(es),
+      this.typ
+    ))
+  }
+
+  def instantiate(init: VariableInstantiation): AddTerm = {
+    AddTerm(
+      this.a.instantiate(init),
+      this.b.instantiate(init),
+      this.typ
+    )
+  }
+}
+
 case class Var(name: String, typ: Type) extends Term {
 
   def pretty() : String = this.name
