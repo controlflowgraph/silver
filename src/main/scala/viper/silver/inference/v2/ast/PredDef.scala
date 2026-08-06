@@ -13,7 +13,6 @@ case class PredDef(name: String, params: Seq[String], body: TransparentPredicate
 
 object PredDefConstructor {
   def locToTerm(loc: Exp): Term = {
-    println(s"loc to term -> ${loc} => ${loc.typ}")
     loc match {
       case access: LocationAccess => access match {
         case p@FieldAccess(rcv, field) => FieldAcc(locToTerm(rcv), field.name, p.typ)

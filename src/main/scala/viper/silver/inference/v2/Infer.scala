@@ -697,6 +697,8 @@ case class Infer(program: Program) {
     println("================================================================")
     this.program.methods.foreach(n => {
       println(s"METHOD OUTLINE COMPUTE: ${n.name}")
+      println(n)
+      println(" ")
       computeOutline(n);
     })
 
@@ -869,7 +871,7 @@ case class Infer(program: Program) {
       .map(m => m.name)
       .toSet
     println("mutating before:")
-    mutatingMethods.foreach(a => println(a))
+    mutatingMethods.foreach(a => println(s"\t${a}"))
 
     val fp = fixpoint[Set[String]](
       mutatingMethods,
@@ -878,7 +880,7 @@ case class Infer(program: Program) {
 
     println("")
     println("mutating after:")
-    fp.foreach(a => println(a))
+    fp.foreach(a => println(s"\t${a}"))
     fp
   }
 
@@ -1110,16 +1112,15 @@ case class Infer(program: Program) {
 
   trait Requirement {}
 
-  case class MethCallReq(name: String, args: Seq[ObjIdent], res: Seq[ObjIdent]) extends Requirement {
+  case class MethCallReq(name: String, args: Seq[ObjIdent], res: Seq[ObjIdent], source: String) extends Requirement {
 
   }
 
-  case class HasField(source: ObjIdent, field: String, obj: ObjIdent) extends Requirement {
+  case class HasField(src: ObjIdent, field: String, obj: ObjIdent, source: String) extends Requirement {
 
   }
 
-  case class ObjRef(ident: ObjIdent, original: Boolean, fields: Map[String, ObjIdent]) {
-
+  case class ObjRef(ident: ObjIdent, source: String, fields: Map[String, ObjIdent]) {
 
   }
 
@@ -1127,34 +1128,42 @@ case class Infer(program: Program) {
     override def toString: String = s"'${this.value}"
   }
 
-  case class Structurer(condition: Seq[Exp], drift: Map[ObjIdent, ObjRef], assignment: Map[String, ObjIdent], var tempCounter: Int, structure: Set[(Seq[Exp], Requirement)]) {
+  case class Counter(var value: Int) {
+    def next(): Int = {
+      val res = this.value;
+      this.value += 1;
+      res
+    }
+  }
 
-    def this() = this(Seq(), Map(), Map(), 0, Set())
+  case class Structurer(condition: Seq[Exp], drift: Map[ObjIdent, ObjRef], assignment: Map[String, ObjIdent], var tempCounter: Counter, structure: Set[(Seq[Exp], Requirement)]) {
+
+    def this() = this(Seq(), Map(), Map(), Counter(0), Set())
 
     def addRequirement(req: Requirement): Structurer = {
       Structurer(this.condition, this.drift, this.assignment, this.tempCounter, this.structure.union(Set((this.condition, req))))
     }
 
     def initParameter(name: String): Structurer = {
-      initDecl(name, original = true)
+      initDecl(name, "$param")
     }
 
 
     def initVariable(name: String): Structurer = {
-      initDecl(name, original = false)
+      initDecl(name, "$var$" + name) // this source type should not matter
     }
 
     def getAssignmentRef(name: String): ObjIdent = {
       this.assignment.getOrElse(name, null)
     }
 
-    def initDecl(name: String, original: Boolean): Structurer = {
+    def initDecl(name: String, source: String): Structurer = {
       if (this.assignment.contains(name)) {
         this
       }
       else {
         val ident = freshTemp()
-        val or = ObjRef(ident, original, Map())
+        val or = ObjRef(ident, source, Map())
         Structurer(this.condition, this.drift.updated(ident, or), this.assignment.updated(name, ident), this.tempCounter, this.structure)
       }
     }
@@ -1167,15 +1176,24 @@ case class Infer(program: Program) {
       this.assignment(name)
     }
 
+    def freshSourceCall(method: String): String = {
+      val value = this.tempCounter.next()
+      s"call_${method}_${value}" // TODO: fix this with separating via $
+    }
+
+    def freshSourceNew(): String = {
+      val value = this.tempCounter.next()
+      s"new_${value}" // TODO: fix this with separating via $
+    }
+
     def freshTemp(): ObjIdent = {
-      val value = this.tempCounter
-      this.tempCounter += 1
+      val value = this.tempCounter.next()
       ObjIdent(s"t${value}")
     }
 
-    def freshObj(): (ObjIdent, Structurer) = {
+    def freshObj(source: String): (ObjIdent, Structurer) = {
       val f = freshTemp()
-      val or = ObjRef(f, original = false, Map())
+      val or = ObjRef(f, source, Map())
       (f, Structurer(this.condition, this.drift.updated(f, or), this.assignment, this.tempCounter, this.structure))
     }
 
@@ -1191,7 +1209,7 @@ case class Infer(program: Program) {
           remFields = remFields.tail
         }
         val oor = this.drift(current)
-        val uor = ObjRef(oor.ident, oor.original, oor.fields.updated(remFields.head, value))
+        val uor = ObjRef(oor.ident, oor.source, oor.fields.updated(remFields.head, value))
         Structurer(this.condition, this.drift.updated(current, uor), this.assignment, this.tempCounter, this.structure)
       }
     }
@@ -1211,19 +1229,17 @@ case class Infer(program: Program) {
       (current, struct)
     }
 
+    // TODO: introduce a ValRef type that allows the assignment of value terms
+    //       these can be recombined and used to construct all the other simple terms
+
+
     def resolveField(obj: ObjIdent, field: String): (ObjIdent, Structurer) = {
-      // TODO: the lookup will propergate the original flag if the sub part has not been initialized yet
-      // TODO: the assignment does not translate the original flag since the value that is assigned is just copied
-      //        -> however the field lookup can still propergate the original flag
       val or = this.drift(obj)
       if (!or.fields.contains(field)) {
         val oi = this.freshTemp()
-        val created = ObjRef(oi, or.original, Map())
-        val updated = ObjRef(or.ident, or.original, or.fields.updated(field, oi))
-        var updatedStructure = this.structure
-        if (or.original) {
-          updatedStructure = this.structure.union(Set((this.condition, HasField(obj, field, oi))))
-        }
+        val created = ObjRef(oi, or.source, Map())
+        val updated = ObjRef(or.ident, or.source, or.fields.updated(field, oi))
+        var updatedStructure = this.structure.union(Set((this.condition, HasField(obj, field, oi, or.source))))
         (oi, Structurer(this.condition, this.drift.updated(obj, updated).updated(oi, created), this.assignment, this.tempCounter, updatedStructure))
       }
       else {
@@ -1291,7 +1307,7 @@ case class Infer(program: Program) {
       case NewStmt(lhs, fields) => {
         structs.map(s => s.initVariable(lhs.name))
           .map(s => {
-            val t = s.freshObj()
+            val t = s.freshObj(s.freshSourceNew())
             t._2.performAssignment(lhs.name, Seq(), t._1)
           })
       }
@@ -1325,9 +1341,10 @@ case class Infer(program: Program) {
         arged.flatMap(e => {
           val strc = e._1
           val ags = e._2
+          val callSrc = strc.freshSourceCall(methodName)
           val targetResult = targets.foldLeft(Seq((strc, Seq[ObjIdent]())))((arr, b) => arr.map(agg => {
               if(b.typ.equals(Ref)) {
-                val freshed = agg._1.freshObj()
+                val freshed = agg._1.freshObj(callSrc)
                 val result = freshed._2.performAssignment(b.name, Seq(), freshed._1)
                 (result, agg._2 ++ Seq(freshed._1))
               }
@@ -1338,7 +1355,7 @@ case class Infer(program: Program) {
 
           // COMBINE TO METHOD CALL REQUIREMENT WITH: ags
           targetResult.map(vvv => {
-            vvv._1.addRequirement(MethCallReq(methodName, ags, vvv._2))
+            vvv._1.addRequirement(MethCallReq(methodName, ags, vvv._2, callSrc))
           })
         })
       }
