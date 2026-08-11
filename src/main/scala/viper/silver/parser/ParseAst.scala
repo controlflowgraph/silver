@@ -697,7 +697,7 @@ case class PFunctionType(argTypes: Seq[PType], resultType: PType) extends PInter
 object GenericParameterInstantiationHelper {
   def processParametersPredicate(pred: PPredicate, generics: Set[String]): PPredicate = {
     try {
-      println("STARTING....")
+//      println("STARTING....")
       val res = PPredicate(
         pred.annotations,
         pred.keyword,
@@ -710,7 +710,7 @@ object GenericParameterInstantiationHelper {
           PBracedExp(e)(b.pos)
         }) // TODO CFG: fix this stuff when subbing the body
       )(pred.pos)
-      println("STOPPING....")
+//      println("STOPPING....")
       res
     } catch {
       case e => {

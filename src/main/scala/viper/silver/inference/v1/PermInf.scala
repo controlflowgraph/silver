@@ -857,7 +857,8 @@ case class PermInf(program: Program) {
         program.functions,
         program.predicates,
         updatedMethods,
-        program.extensions
+        program.extensions,
+        program.typeAnnotations
       )(pos=program.pos, info=program.info, errT=program.errT)
 
       //sys.error("FINISHED")

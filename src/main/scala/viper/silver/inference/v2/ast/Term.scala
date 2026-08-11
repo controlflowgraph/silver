@@ -134,3 +134,4 @@ case class FracPerm(left: Term, right: Term, typ: Type) extends Term {
     )
   }
 }
+

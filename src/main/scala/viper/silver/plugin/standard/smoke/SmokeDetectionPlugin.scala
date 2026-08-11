@@ -97,7 +97,7 @@ class SmokeDetectionPlugin(@unused reporter: viper.silver.reporter.Reporter,
     })
 
     Program(input.domains, input.fields, input.functions, input.predicates, methodsWithoutUnreachableRefutes,
-      input.extensions)(input.pos, input.info, input.errT)
+      input.extensions, input.typeAnnotations)(input.pos, input.info, input.errT)
   }
 
   /**

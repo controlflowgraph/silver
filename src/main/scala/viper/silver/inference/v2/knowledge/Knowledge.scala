@@ -1,6 +1,7 @@
 package viper.silver.inference.v2.knowledge
 
 import viper.silver.ast.{EqCmp, Exp, NeCmp, NullLit}
+import viper.silver.inference.v2.VariableInstantiation
 import viper.silver.inference.v2.ast.PredDefConstructor.expToTerm
 import viper.silver.inference.v2.ast.{FieldAcc, Term, TermSub, Var}
 
@@ -11,6 +12,8 @@ trait Knowledge {
   def pretty() : String
 
   def negate(): Knowledge
+
+  def instantiate(vars: VariableInstantiation): Knowledge
 }
 
 case class IsNull(e: Term) extends Knowledge {
@@ -26,6 +29,10 @@ case class IsNull(e: Term) extends Knowledge {
   def pretty() : String= {
     this.e.pretty() + " == null"
   }
+
+  def instantiate(vars: VariableInstantiation): Knowledge = {
+    IsNull(this.e.instantiate(vars))
+  }
 }
 
 case class IsNonNull(e: Term) extends Knowledge {
@@ -40,6 +47,10 @@ case class IsNonNull(e: Term) extends Knowledge {
 
   def pretty() : String= {
     this.e.pretty() + " != null"
+  }
+
+  def instantiate(vars: VariableInstantiation): Knowledge = {
+    IsNonNull(this.e.instantiate(vars))
   }
 }
 

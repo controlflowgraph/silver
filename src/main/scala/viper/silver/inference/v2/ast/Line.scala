@@ -1,6 +1,6 @@
 package viper.silver.inference.v2.ast
 
-import viper.silver.ast.{Injection, Stmt}
+import viper.silver.ast.{Exp, Injection, Stmt}
 import viper.silver.inference.v2.knowledge.Knowledge
 
 trait Line {
@@ -37,7 +37,7 @@ case class ExhaleLine(location: Injection, pred: PredTerm) extends Line {
 
 case class AssumeLine(pred: PredTerm, knowledge: Set[Knowledge]) extends Line {
   def pretty(indent: Int): String = {
-    s"${" " * indent}assume: ${pred.pretty()} && ${this.knowledge.map(_.pretty()).mkString(" & ")}"
+    s"${" " * indent}assume: PRED: ${pred.pretty()} && KM: ${this.knowledge.map(_.pretty()).mkString(" & ")}"
   }
 }
 
@@ -47,9 +47,9 @@ case class AssertLine(location: Injection, pred: PredTerm) extends Line {
   }
 }
 
-case class NonDetBranch(location: Injection, first: Line, second: Line) extends Line {
+case class Branching(location: Injection, cond: Exp, first: Line, second: Line, firstInj: Injection, secondInj: Injection) extends Line {
   def pretty(indent: Int): String = {
-    s"${" " * indent}{\n${this.first.pretty(indent + 4)}\n${" " * indent}} [] {\n${this.second.pretty(indent + 4)}\n${" " * indent}}"
+    s"${" " * indent}${cond}\n${" " * indent}{\n${this.first.pretty(indent + 4)}\n${" " * indent}} [] {\n${this.second.pretty(indent + 4)}\n${" " * indent}}"
   }
 }
 

@@ -172,10 +172,13 @@ case class TransparentPredicateTree(foldingStory: Seq[(Injection, FoldingStep)],
   def unfold(location: Injection, defs: Map[String, PredDef], ts: TermSub, pred: PredInstance): TransparentPredicateTree = {
 //    println(s">>> UNFOLDING: ${pred}")
     val predDef = defs(pred.name)
+    println(s"PRED DEF: ${predDef.body.pretty()}")
     val inst = VariableInstantiation(predDef.params.zip(pred.values).toMap)
+    println(s"INSTANTIATION: ${inst}")
     val instBody = predDef.body
       .instantiate(inst)
       .substitute(ts)
+    println(s"INST BODY FOLDED: ${instBody.folded}")
     TransparentPredicateTree(
       this.foldingStory ++ Seq((location, FoldingStep(unfolding = true, pred))),
       this.direct.union(instBody.direct),
@@ -183,7 +186,7 @@ case class TransparentPredicateTree(foldingStory: Seq[(Injection, FoldingStep)],
     )
   }
 
-  def fold(location: Injection, defs: Map[String, PredDef], ts: TermSub, pred: PredInstance): TransparentPredicateTree = {
+  def fold(location: Injection, defs: Map[String, PredDef], ts: TermSub, pred: PredInstance, knowledge: Set[Knowledge]): TransparentPredicateTree = {
 //    println(s">>> FOLDING: ${pred}")
     val predDef = defs(pred.name)
     val inst = VariableInstantiation(predDef.params.zip(pred.values).toMap)
@@ -191,25 +194,29 @@ case class TransparentPredicateTree(foldingStory: Seq[(Injection, FoldingStep)],
       .instantiate(inst)
       .substitute(ts)
     if(!instBody.direct.subsetOf(this.direct)) {
-      sys.error(s"Not all field access permissions present when folding predicate ${pred} (missing: ${instBody.direct.diff(this.direct)})")
+      sys.error(s"Not all field access permissions present when folding predicate ${pred.pretty()} (missing: ${instBody.direct.diff(this.direct)})")
     }
 
     if(!instBody.folded.subsetOf(this.folded)) {
-      sys.error(s"Not all predicate permissions present when folding predicate ${pred} (missing: ${instBody.folded.diff(this.folded)})")
+      sys.error(s"Not all predicate permissions present when folding predicate ${pred.pretty()} (missing: ${instBody.folded.diff(this.folded)})")
     }
     TransparentPredicateTree(
       this.foldingStory ++ Seq((location, FoldingStep(unfolding = false, pred))),
       this.direct.diff(instBody.direct),
-      this.folded.diff(instBody.folded).union(Set((Set(), pred)))
+      this.folded.diff(instBody.folded).union(Set((knowledge, pred)))
     )
   }
 
   def instantiate(vars: VariableInstantiation): TransparentPredicateTree = {
     TransparentPredicateTree(
       this.foldingStory,
-      this.direct.map(d => (d._1, d._2.instantiate(vars))),
-      this.folded.map(f => (f._1, f._2.instantiate(vars)))
+      this.direct.map(d => (instKSet(d._1, vars), d._2.instantiate(vars))),
+      this.folded.map(f => (instKSet(f._1, vars), f._2.instantiate(vars)))
     )
+  }
+
+  def instKSet(knowledge: Set[Knowledge], vars: VariableInstantiation) : Set[Knowledge] = {
+    knowledge.map(k => k.instantiate(vars))
   }
 
   def findPredInstanceUnfoldingStrategy(defs: Map[String, PredDef], kb: KnowledgeBase, pred: PredInstance, depth: Int): Option[FoldingStrategy] = {
@@ -283,7 +290,10 @@ case class TransparentPredicateTree(foldingStory: Seq[(Injection, FoldingStep)],
     TransparentPredicateTree(this.foldingStory, this.direct, this.folded.union(Set((knowledge, pred))))
   }
 
-  def subKSet(knowledge: Set[Knowledge], ts: TermSub): Set[Knowledge] = knowledge.map(_.substitute(ts))
+  def subKSet(knowledge: Set[Knowledge], ts: TermSub): Set[Knowledge] = {
+    println(s"substituting knowledge set: ${knowledge} with ${ts}")
+    knowledge.map(_.substitute(ts))
+  }
 
   def substitute(ts: TermSub): TransparentPredicateTree = {
     // TODO: think about how to apply the substitution to the fields since only variables should be renamed

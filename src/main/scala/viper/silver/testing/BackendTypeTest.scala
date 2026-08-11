@@ -136,7 +136,7 @@ trait BackendTypeTest extends AnyFunSuite with Matchers with BeforeAndAfterAllCo
     val equality = BackendFuncApp(fp_eq, Seq(Result(fp.typ)(), result_addition))()
 
     val fun = Function("test", Seq(), fp.typ, Seq(), Seq(equality), Some(addition))()
-    val program = Program(Seq(fp.constructDomain(Seq(to_fp, fp_eq, fp_add)), bv32.constructDomain(Seq(from_int))), Seq(), Seq(fun), Seq(), Seq(), Seq())()
+    val program = Program(Seq(fp.constructDomain(Seq(to_fp, fp_eq, fp_add)), bv32.constructDomain(Seq(from_int))), Seq(), Seq(fun), Seq(), Seq(), Seq(), Map())()
     (program, fun, equality)
   }
 
@@ -165,7 +165,7 @@ trait BackendTypeTest extends AnyFunSuite with Matchers with BeforeAndAfterAllCo
     val body = Seqn(Seq(inhale, assign, fold, exhale), Seq())()
     val method = Method("m_id", Seq(), Seq(selfVar), Seq(), Seq(), Some(body))()
     val domains = Seq(fp.constructDomain(Seq(to_fp)), bv64.constructDomain(Seq(from_int)))
-    val prog = Program(domains, Seq(field), Seq(), Seq(pred), Seq(method), Seq())()
+    val prog = Program(domains, Seq(field), Seq(), Seq(pred), Seq(method), Seq(), Map())()
 
     prog
   }
@@ -241,7 +241,7 @@ trait BackendTypeTest extends AnyFunSuite with Matchers with BeforeAndAfterAllCo
   def wrapInProgram(domains: Seq[Domain], stmts: Seq[Stmt], params: Seq[LocalVarDecl], vars: Seq[LocalVarDecl], fields: Seq[Field] = Seq()): Program = {
     val block = Seqn(stmts, vars)()
     val method = Method("test", params, Seq(), Seq(), Seq(), Some(block))()
-    Program(domains, fields, Seq(), Seq(), Seq(method), Seq())()
+    Program(domains, fields, Seq(), Seq(), Seq(method), Seq(), Map())()
   }
 
   val verifier : Verifier

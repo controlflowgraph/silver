@@ -357,7 +357,7 @@ class TerminationPlugin(@unused reporter: viper.silver.reporter.Reporter,
         case None => newWhile
       }
   }).recurseFunc({
-    case Program(_, _, functions, _, methods, _) => Seq(functions, methods)
+    case Program(_, _, functions, _, methods, _, _) => Seq(functions, methods)
     case method: Method => Seq(method.body)
   })
 

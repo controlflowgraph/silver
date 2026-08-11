@@ -41,11 +41,11 @@ class AdtEncoder(val program: Program) extends AdtNameManager {
 
     // In a first step encode all adt top level declarations and constructor calls
     var newProgram: Program = StrategyBuilder.Slim[Node]({
-      case p@Program(domains, fields, functions, predicates, methods, extensions) =>
+      case p@Program(domains, fields, functions, predicates, methods, extensions, typeAnnotations) =>
         val remainingExtensions = extensions filter { case _: Adt => false; case _ => true }
         val tmp = extensions collect { case a: Adt => encodeAdtAsDomain(a, generateWellFoundedness(a)) }
         val encodedAdtsAsDomains: Seq[Domain] = tmp.flatten
-        Program(domains ++ encodedAdtsAsDomains, fields, functions, predicates, methods, remainingExtensions)(p.pos, p.info, p.errT)
+        Program(domains ++ encodedAdtsAsDomains, fields, functions, predicates, methods, remainingExtensions, typeAnnotations)(p.pos, p.info, p.errT)
       case aca: AdtConstructorApp => encodeAdtConstructorApp(aca)
       case ada: AdtDestructorApp => encodeAdtDestructorApp(ada)
       case ada: AdtDiscriminatorApp => encodeAdtDiscriminatorApp(ada)

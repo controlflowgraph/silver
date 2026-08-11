@@ -493,7 +493,7 @@ object FastPrettyPrinter extends FastPrettyPrinterBase with BracketPrettyPrinter
 
   /** Show a program. */
   def showProgram(p: Program): Cont = {
-    val Program(domains, fields, functions, predicates, methods, extensions) = p
+    val Program(domains, fields, functions, predicates, methods, extensions, annotations) = p
     showComment(p) <@>
       ssep((domains ++ fields ++ functions ++ predicates ++ methods ++ extensions) map show, line <> line)
   }

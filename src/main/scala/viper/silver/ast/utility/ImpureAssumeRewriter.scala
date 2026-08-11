@@ -237,7 +237,7 @@ object ImpureAssumeRewriter {
         case p: Program =>
           val assumeDomain = Domain(domainName, funcs, axioms)(info = Synthesized)
 
-          Program(p.domains ++ domains :+ assumeDomain, p.fields, p.functions, p.predicates, p.methods, p.extensions)(p.pos, p.info, p.errT)
+          Program(p.domains ++ domains :+ assumeDomain, p.fields, p.functions, p.predicates, p.methods, p.extensions, p.typeAnnotations)(p.pos, p.info, p.errT)
       }).execute(pAssume)
     }
   }

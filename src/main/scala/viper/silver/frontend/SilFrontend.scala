@@ -289,7 +289,7 @@ trait SilFrontend extends DefaultFrontend {
               }, Some(1))
               if (chopped.isEmpty) {
                 reporter report WarningsDuringTypechecking(Seq(TypecheckerWarning("No members were selected.", inputPlugin.pos)))
-                Program(Seq(), Seq(), Seq(), Seq(), Seq(), Seq())(inputPlugin.pos, inputPlugin.info, inputPlugin.errT)
+                Program(Seq(), Seq(), Seq(), Seq(), Seq(), Seq(), Map())(inputPlugin.pos, inputPlugin.info, inputPlugin.errT)
               } else {
                 chopped.head
               }

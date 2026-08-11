@@ -45,6 +45,7 @@ case class Translator(program: PProgram) {
   val instantiatedDatatypes: scala.collection.mutable.Map[Type, Datatype] = new mutable.HashMap[Type, Datatype]()
 
   val methodTemplates: scala.collection.mutable.Map[String, MethodTemplate] = new mutable.HashMap[String, MethodTemplate]()
+  val typeAnnotations: scala.collection.mutable.Map[String, (Seq[Type], Seq[Type])] = new mutable.HashMap[String, (Seq[Type], Seq[Type])]()
   val instantiatedMethods: scala.collection.mutable.Set[String] = new mutable.HashSet[String]()
   val coreMethods: scala.collection.mutable.Set[String] = new mutable.HashSet[String]()
 
@@ -319,9 +320,11 @@ case class Translator(program: PProgram) {
 
 
     println("9")
+
     val finalProgram = ImpureAssumeRewriter.rewriteAssumes(Program(domain.asInstanceOf[Seq[Domain]], filteredFields,
       functions.asInstanceOf[Seq[Function]], filteredPredicates, filteredMethods,
-      (extensions filter (t => t.isInstanceOf[ExtensionMember])).asInstanceOf[Seq[ExtensionMember]])(program))
+      (extensions filter (t => t.isInstanceOf[ExtensionMember])).asInstanceOf[Seq[ExtensionMember]],
+      typeAnnotations.toMap)(program))
 
     //    println("METHODS:")
     //    filteredMethods.foreach(m => println(m.name, m.pres))
@@ -565,6 +568,7 @@ case class Translator(program: PProgram) {
 
   def generateDatatypeMakeMethod(typ: Type, instantiated: Datatype): Method = {
     val encodedSignature = encodeTypeAsString(typ)
+    val makeName = s"make${"$"}${encodedSignature}"
 
     val valArgs = instantiated.content.map(v => LocalVarDecl(v.name, convertToViperType(v.typ))())
     val permArgs = instantiated.content.flatMap(v => if (isDatatype(v.typ)) Some(v.name + "$P") else None)
@@ -573,17 +577,21 @@ case class Translator(program: PProgram) {
 
     val returns = Seq(LocalVarDecl("this", Ref)())
 
+    typeAnnotations.put(makeName, (instantiated.content.map(v => v.typ) ++ permArgs.map(a => a.typ), Seq(typ)))
+
     // TODO: add permissions to all the transitive predicates as preconditions
-    val transPredAccess = instantiated.content
-      .filter(v => isDatatype(v.typ))
-      .map(v => {
-        val valParam = LocalVar(v.name, Ref)()
-        val permParam = LocalVar(v.name + "$P", Perm)()
-        val predSignature = encodeTypeAsString(v.typ)
-        val predAccess = PredicateAccess(Seq(valParam), predSignature)()
-        val predAccPred = PredicateAccessPredicate(predAccess, Some(permParam))()
-        Implies(NeCmp(valParam, NullLit()())(), predAccPred)()
-      })
+    // TODO: REACTIVATE WHEN REQUIRES ARE NOT INTRODUCED BLINDLY
+    val transPredAccess = Seq()
+//    instantiated.content
+//      .filter(v => isDatatype(v.typ))
+//      .map(v => {
+//        val valParam = LocalVar(v.name, Ref)()
+//        val permParam = LocalVar(v.name + "$P", Perm)()
+//        val predSignature = encodeTypeAsString(v.typ)
+//        val predAccess = PredicateAccess(Seq(valParam), predSignature)()
+//        val predAccPred = PredicateAccessPredicate(predAccess, Some(permParam))()
+//        Implies(NeCmp(valParam, NullLit()())(), predAccPred)()
+//      })
 
     val permRangeGuard = instantiated.content
       .filter(v => isDatatype(v.typ))
@@ -626,7 +634,8 @@ case class Translator(program: PProgram) {
         Unfolding(finalPredAccess, EqCmp(fieldAccess, paramVar)())()
       })
 
-    val postconditions = Seq(finalPredAccess) ++ valParamEqValInObj ++ permParamEqValInObj
+    /* TODO: REINTRODUCE WHEN NOT INSERTED BLINDLY: Seq(finalPredAccess) */
+    val postconditions = Seq()  ++ valParamEqValInObj ++ permParamEqValInObj
 
     val objValFields = instantiated.content
       .map(v => {
@@ -668,7 +677,7 @@ case class Translator(program: PProgram) {
     val body = Seqn(Seq(objCreation) ++ valSetting ++ permSetting, Seq())()
 
     Method(
-      s"make${"$"}${encodedSignature}",
+      makeName,
       args,
       returns,
       preconditions,
@@ -765,17 +774,26 @@ case class Translator(program: PProgram) {
       .map(v => v.e)
       .map(exp)
 
-    val returning = temp.ref.returns.map(m => m.formalReturns.inner
-        .toSeq.map(r => LocalVarDecl(
-          r.idndef.name,
-          convertToViperType(ttyp(r.typ)))()))
+    val returningMapped = temp.ref.returns.map(m => m.formalReturns.inner
+        .toSeq
+        .map(r => (r.idndef.name, ttyp(r.typ))))
       .getOrElse(Nil)
 
+    val returning = returningMapped
+      .map(r => LocalVarDecl(
+        r._1,
+        convertToViperType(r._2))())
+
     val adjustedName = temp.ref.idndef.name + "$" + encodeTypeListAsString(args.map(ttyp))
-    val replacedArgs = temp.ref.formalArgs
-      .map(a => LocalVarDecl(a.idndef.name, convertToViperType(ttyp(a.typ.substitute(substitution))))())
+    val argsMapped = temp.ref.formalArgs
+      .map(a => (a.idndef.name, ttyp(a.typ.substitute(substitution))))
+    println(s"${adjustedName} => ${argsMapped} ${substitution}")
+    val replacedArgs = argsMapped
+      .map(a => LocalVarDecl(a._1, convertToViperType(a._2))())
 
     if (!instantiatedMethods.contains(adjustedName)) {
+
+      typeAnnotations.put(adjustedName, (argsMapped.map(_._2), returningMapped.map(_._2)))
       instantiatedMethods.add(adjustedName)
 
       // add the method without body to prevent infinite cycles
