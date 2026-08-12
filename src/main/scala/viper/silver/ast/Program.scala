@@ -18,8 +18,14 @@ import viper.silver.utility.{CacheHelper, DependencyAware}
 import scala.collection.immutable
 import scala.reflect.ClassTag
 
+case class InferInfo(typeAnnotations: Map[String, (Seq[Type], Seq[Type])]) {
+  def this() = {
+    this(Map())
+  }
+}
+
 /** A Silver program. */
-case class Program(domains: Seq[Domain], fields: Seq[Field], functions: Seq[Function], predicates: Seq[Predicate], methods: Seq[Method], extensions: Seq[ExtensionMember], typeAnnotations: Map[String, (Seq[Type], Seq[Type])])(val pos: Position = NoPosition, val info: Info = NoInfo, val errT: ErrorTrafo = NoTrafos)
+case class Program(domains: Seq[Domain], fields: Seq[Field], functions: Seq[Function], predicates: Seq[Predicate], methods: Seq[Method], extensions: Seq[ExtensionMember], inferInfo: InferInfo)(val pos: Position = NoPosition, val info: Info = NoInfo, val errT: ErrorTrafo = NoTrafos)
   extends Node with DependencyAware with Positioned with Infoed with Scope with TransformableErrors {
 
   lazy val domainsByName: Map[String, Domain] = domains.map(x => (x.name, x)).toMap

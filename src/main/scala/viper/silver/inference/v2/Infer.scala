@@ -149,7 +149,7 @@ case class Infer(program: Program) {
           .map(t => t.substitute(TermSub((argRepl ++ retRepl).toMap)))
           .map(v => InhaleLine(v))
 
-        val reqs = this.program.typeAnnotations(methodName)
+        val reqs = this.program.inferInfo.typeAnnotations(methodName)
         val argNames = this.program.methods.filter(m => m.name.equals(methodName)).head.formalArgs.map(f => f.name)
         val paramedExhaling: Seq[ExhaleLine] = reqs._1.zip(argNames).flatMap(t => t._1 match {
           case dt: DatatypeType => {
@@ -762,7 +762,7 @@ case class Infer(program: Program) {
     println(s"METHOD: ${method.name}")
     val mappedBody = method.body.map((methBody: Seqn) => {
 
-      val reqs = this.program.typeAnnotations(method.name)
+      val reqs = this.program.inferInfo.typeAnnotations(method.name)
       val argNames = method.formalArgs.map(l => l.name)
       val paramedInhaling: Sequence = Sequence(reqs._1.zip(argNames).flatMap(t => t._1 match {
         case dt: DatatypeType => {
@@ -877,7 +877,7 @@ case class Infer(program: Program) {
 
     println("================================================================")
 
-    this.program.typeAnnotations.foreach(v => {
+    this.program.inferInfo.typeAnnotations.foreach(v => {
       println(s"${v._1}: ${v._2._1} => ${v._2._2}")
     })
 
@@ -903,7 +903,7 @@ case class Infer(program: Program) {
       this.program.predicates,
       translatedMethods,
       this.program.extensions,
-      this.program.typeAnnotations
+      this.program.inferInfo,
     )(this.program.pos, this.program.info, this.program.errT))
 
     None

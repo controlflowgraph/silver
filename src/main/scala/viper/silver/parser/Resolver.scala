@@ -417,9 +417,6 @@ case class TypeChecker(program: PProgram, names: NameAnalyser) {
         checkInternal(targets.head)
         checkInternal(m)
       case PAssign(targets, _, rhs) if targets.length == 1 => {
-        println(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
-        println(s"checking rhs with ${targets.head} has type ${targets.head.typ}")
-        println(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
         check(rhs, targets.head.typ)
       }
       // Anything after this has to satisfy `targets.length != 1 && !rhs.isInstanceOf[PCall]`:
@@ -825,11 +822,7 @@ case class TypeChecker(program: PProgram, names: NameAnalyser) {
           case _ =>
         }
       case pc: PPredCall => {
-        println("special pred call case")
         // check if the predicate is actually a datatype :)
-        println(s"DT NAME: ${pc.idnref.name}")
-        println(s"GOTTEN DT: ${getDatatypeByName(pc.idnref.name)}")
-        println("CHECKING THE PredCall!!!!!!!")
         setType(Predicate)
       }
 
@@ -933,7 +926,6 @@ case class TypeChecker(program: PProgram, names: NameAnalyser) {
 
 
               case acc: PAccPred =>
-                println(s"CHECKING THE ACC LOC: ${acc.loc}")
                 acc.loc match {
                   case _: PFieldAccess =>
                   case pc: PCall if pc.isPredicate => {

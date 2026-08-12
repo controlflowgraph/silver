@@ -3,12 +3,13 @@ package viper.silver.inference
 import viper.silver.ast._
 import viper.silver.inference.v1.PermInf
 import viper.silver.inference.v2.Infer
+import viper.silver.inference.v3.InferV3
 
 
 object PermissionInference {
   def process(program: Program): Option[Program] = {
     try{
-      Infer(program).process()
+      InferV3(program).process()
     }
     catch {
       case e: Exception => {

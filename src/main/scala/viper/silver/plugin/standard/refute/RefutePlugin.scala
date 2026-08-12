@@ -62,7 +62,7 @@ class RefutePlugin(@unused reporter: viper.silver.reporter.Reporter,
         case method: Method => Seq(method.body)
       }).execute[Method](method)
     })
-    Program(input.domains, input.fields, input.functions, input.predicates, transformedMethods, input.extensions, input.typeAnnotations)(input.pos, input.info, input.errT)
+    Program(input.domains, input.fields, input.functions, input.predicates, transformedMethods, input.extensions, input.inferInfo)(input.pos, input.info, input.errT)
   }
 
   /** Remove refutation related errors for the current entity and add refuteAsserts in this entity that didn't report an error. */

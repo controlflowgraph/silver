@@ -254,16 +254,13 @@ case class Translator(program: PProgram) {
   def translate: Option[Program] /*(Program, Seq[Messaging.Record])*/ = {
     // assert(TypeChecker.messagecount == 0, "Expected previous phases to succeed, but found error messages.") // AS: no longer sharing state with these phases
 
-    println("1")
     val (pdomains, pfields, pfunctions, ppredicates, pmethods, pextensions, pdatatypes) =
       (program.domains, program.fields, program.functions, program.predicates, program.methods, program.extensions, program.datatypes)
 
-    println("2")
     prepareDatatypeTemplates(pdatatypes)
     prepareMethodTemplates(pmethods)
     //    println("prepared templates")
 
-    println("3")
     /* [2022-03-14 Alessandro] Domain signatures need no be translated first, since signatures of other declarations
       * like domain functions, and ordinary functions might depend on the domain signature. Especially this is the case
       * when signatures contain user-defined domain types. The same applies for extensions since they might introduce
@@ -275,7 +272,6 @@ case class Translator(program: PProgram) {
     /* [2022-03-14 Alessandro] Following signatures can be translated independently of each other but must be translated
       * after signatures of domains and extensions because of the above mentioned reasons.
       */
-    println("4")
     pdomains flatMap (_.funcs) foreach translateMemberSignature
     (pfields ++ pfunctions ++ ppredicates) foreach translateMemberSignature
     //    println("translated signatures")
@@ -283,7 +279,6 @@ case class Translator(program: PProgram) {
     /* [2022-03-14 Alessandro] After the signatures are translated, the actual full translations can be done
       * independently of each other.
       */
-    println("5")
     val extensions = pextensions map translate
     val domain = (pdomains map translate) ++ extensions filter (t => t.isInstanceOf[Domain])
     val fields = (pfields flatMap (_.fields.toSeq map translate)) ++ extensions filter (t => t.isInstanceOf[Field])
@@ -293,7 +288,6 @@ case class Translator(program: PProgram) {
 
     //    println("translated everything except methods")
 
-    println("6")
     val methods = (pmethods map translate) ++ extensions filter (t => t.isInstanceOf[Method])
     //    println("translated methods")
     //    val methods = (pmethods ++ extensions filter (t => t.isInstanceOf[Method])).filter(m => m.typVars.map(v => v.inner.toSeq.length).getOrElse(0) == 0) (pmethods map translate) ++ extensions filter (t => t.isInstanceOf[Method])
@@ -301,13 +295,11 @@ case class Translator(program: PProgram) {
 
     // start tracing the methods from ones with no generic parameters
 
-    println("7")
     val filteredFields: Seq[Field] = members.values
       .filter(_.isInstanceOf[Field])
       .map(_.asInstanceOf[Field])
       .toSeq
 
-    println("8")
     val filteredPredicates: Seq[Predicate] = members.values
       .filter(_.isInstanceOf[Predicate])
       .map(_.asInstanceOf[Predicate])
@@ -319,18 +311,15 @@ case class Translator(program: PProgram) {
       .toSeq
 
 
-    println("9")
-
     val finalProgram = ImpureAssumeRewriter.rewriteAssumes(Program(domain.asInstanceOf[Seq[Domain]], filteredFields,
       functions.asInstanceOf[Seq[Function]], filteredPredicates, filteredMethods,
       (extensions filter (t => t.isInstanceOf[ExtensionMember])).asInstanceOf[Seq[ExtensionMember]],
-      typeAnnotations.toMap)(program))
+      InferInfo(typeAnnotations.toMap))(program))
 
     //    println("METHODS:")
     //    filteredMethods.foreach(m => println(m.name, m.pres))
 
 
-    println("10")
     finalProgram.deepCollect {
       case fp: ForPerm => Consistency.checkForPermArguments(fp, finalProgram)
       case trig: Trigger => Consistency.checkTriggers(trig, finalProgram)
@@ -351,7 +340,6 @@ case class Translator(program: PProgram) {
 
   private def translate(m: PMethod): Method = m match {
     case PMethod(_, _, idndef, gens, args, _, pres, posts, body) =>
-      println(s"on method: ${m.idndef.name}")
       instantiateMethodTemplate(idndef.name, args.inner.toSeq.map(_.typ))
 
       //      val m = findMethod(idndef)
@@ -733,7 +721,7 @@ case class Translator(program: PProgram) {
     //    println(s"instantiating method ${methodName} with ${args}")
     val temp = getMethodTemplate(methodName)
     val error = (node: PNode) => (msg: String) => {
-      println(s"ERRORINGAAAAHHHH ${msg}")
+      println(s"instantiation error: ${msg}")
     }
     val result = Unification.findUnificationForArgs(error, temp.ref, temp.ref.args.inner.toSeq.map(a => a.typ).zip(args))
     //    println(s"UNIFICATION RESULT: ${result}")
@@ -748,8 +736,6 @@ case class Translator(program: PProgram) {
       .foreach(kv => {
         mapping.put(kv._1, kv._2)
       })
-
-    println(s"mapping: ${mapping}")
 
     val map: Map[String, PType] = mapping.toMap
 

@@ -27,7 +27,7 @@ object Nodes {
   def subnodes(n: Node): Seq[Node] = {
     val subnodesWithType: Seq[Node] = n match {
       case Trigger(exps) => exps
-      case Program(domains, fields, functions, predicates, methods, extensions, typeAnnotations) =>
+      case Program(domains, fields, functions, predicates, methods, extensions, inferInfo) =>
         domains ++ fields ++ functions ++ predicates ++ methods ++ extensions
       case m: Member =>
         m match {

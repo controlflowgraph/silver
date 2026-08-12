@@ -267,7 +267,6 @@ trait SilFrontend extends DefaultFrontend {
     if(_errors.isEmpty) {
       _program match {
         case Some(value) => {
-          println("RUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUN")
           _program = PermissionInference.process(value)
           println(s"PROGRAM AFTER INFERENCE: ${_program}")
         }
@@ -289,7 +288,7 @@ trait SilFrontend extends DefaultFrontend {
               }, Some(1))
               if (chopped.isEmpty) {
                 reporter report WarningsDuringTypechecking(Seq(TypecheckerWarning("No members were selected.", inputPlugin.pos)))
-                Program(Seq(), Seq(), Seq(), Seq(), Seq(), Seq(), Map())(inputPlugin.pos, inputPlugin.info, inputPlugin.errT)
+                Program(Seq(), Seq(), Seq(), Seq(), Seq(), Seq(), new InferInfo())(inputPlugin.pos, inputPlugin.info, inputPlugin.errT)
               } else {
                 chopped.head
               }
