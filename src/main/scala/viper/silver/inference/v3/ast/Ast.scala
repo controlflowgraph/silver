@@ -12,7 +12,16 @@ case class MapTermSub(replacements: Map[Term, Term]) extends TermSub {
   }
 }
 
-case class PredDef(name: String, body: LogicTerm) {
+case class FuncTermSub(f: Term => Term) extends TermSub {
+  def apply(t: Term): Term = {
+    this.f(t)
+  }
+}
+
+case class PredDef(name: String, params: Seq[String], body: LogicTerm) {
+  def pretty(): String = {
+    s"${this.name}(${this.params.mkString(", ")}) := ${this.body.pretty()})"
+  }
 
 }
 
@@ -261,11 +270,11 @@ object PermAmount {
   val NONE: PermFracTerm = PermFracTerm(IntTerm(0), IntTerm(1))
 }
 
-case class PredInstAccTerm(pred: PredInst, perm: PermFracTerm) extends LogicTerm {
+case class PredInstAccTerm(pred: PredInst, perm: Term) extends LogicTerm {
   def substitute(ts: TermSub): Term = {
     ts.apply(PredInstAccTerm(
       this.pred,
-      this.perm.substitute(ts).asInstanceOf[PermFracTerm]
+      this.perm.substitute(ts)
     ))
   }
 
@@ -274,11 +283,11 @@ case class PredInstAccTerm(pred: PredInst, perm: PermFracTerm) extends LogicTerm
   }
 }
 
-case class PredFieldAccTerm(pred: FieldAccTerm, perm: PermFracTerm) extends LogicTerm {
+case class PredFieldAccTerm(pred: FieldAccTerm, perm: Term) extends LogicTerm {
   def substitute(ts: TermSub): Term = {
     ts.apply(PredFieldAccTerm(
       this.pred,
-      this.perm.substitute(ts).asInstanceOf[PermFracTerm]
+      this.perm.substitute(ts)
     ))
   }
 

@@ -54,9 +54,9 @@ case class ExhaleLine(ln: Ident, inj: Injection, exp: LogicTerm) extends Line {
   }
 }
 
-case class BranchLine(ln: Ident, pre: Injection, cond: LogicTerm) extends Line {
+case class BranchLine(ln: Ident, pre: Injection, cond: LogicTerm, thn: Ident, els: Ident) extends Line {
   def pretty(): String = {
-    s"${this.ln.pretty()} [${this.pre.id}] branch ${this.cond.pretty()}"
+    s"${this.ln.pretty()} [${this.pre.id}] branch ${this.cond.pretty()}    [ ${this.thn.pretty()} ; ${this.els.pretty()} ]"
   }
 }
 
@@ -98,7 +98,7 @@ case class InternalRepresentation(counter: Counter, lines: mutable.HashMap[Ident
   def pretty(): String = {
     val barrier = "%" * 100
     val linesPretty = this.lines.toSeq.sortBy(l => l._1.value).map(e => "\t" + e._2.pretty()).mkString("\n")
-    val meshPretty = this.mesh.toSeq.sortBy(e => e._1.value).map(e => s"\t${e._1.pretty()}: ${e._2.mkString(", ")}").mkString("\n")
+    val meshPretty = this.mesh.toSeq.sortBy(e => e._1.value).map(e => s"\t${e._1.pretty()}  ==>  ${e._2.map(v => v.pretty()).mkString(", ")}").mkString("\n")
     s"${barrier}\ncurrent counter: ${counter.value}\nlines:\n${linesPretty}\nmesh:\n${meshPretty}\n${barrier}"
   }
 }

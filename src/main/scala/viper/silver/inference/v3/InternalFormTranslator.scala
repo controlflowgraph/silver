@@ -4,17 +4,27 @@ import viper.silver.ast._
 import viper.silver.inference.v3.ast._
 
 object InternalFormTranslator {
-  def transformSeqnToInternalForm(rep: InternalRepresentation, prev: Set[Ident], defs: Map[String, PredDef], seq: Seqn, inj: Option[Injection]): (Seqn, Set[Ident]) = {
-    val transformed: (Seq[Stmt], Set[Ident]) = seq.ss.foldLeft((Seq[Stmt](), prev))((acc, s) => {
-      val res = translateStmtToInternalForm(rep, acc._2, defs, s)
+  def transformSeqnToInternalForm(rep: InternalRepresentation, prev: Set[Ident], defs: Map[String, PredDef], seq: Seqn, inj: Option[Injection]): (Seqn, Ident, Set[Ident]) = {
+    val transformed: (Seq[Stmt], Seq[Ident], Set[Ident]) = seq.ss.foldLeft((Seq[Stmt](), Seq[Ident](), prev))((acc, s) => {
+      val res = translateStmtToInternalForm(rep, acc._3, defs, s)
 
-      (acc._1 ++ Seq(res._1), res._2)
+      (acc._1 ++ Seq(res._1), acc._2 ++ Seq(res._2), res._3)
     })
     val injection = inj match {
       case Some(value) => Seq(value)
       case None => Seq()
     }
-    (Seqn(transformed._1 ++ injection, seq.scopedSeqnDeclarations)(), transformed._2)
+    if(transformed._1.isEmpty){
+      val ln = rep.freshIdent()
+      val line = AssumeLine(ln, BoolTerm(true))
+
+      rep.introduce(prev, line)
+
+      (Seqn(injection, seq.scopedSeqnDeclarations)(), ln, Set(ln))
+    }
+    else{
+      (Seqn(injection ++ transformed._1, seq.scopedSeqnDeclarations)(), transformed._2.head, transformed._3)
+    }
   }
 
   private var injectionId = 0
@@ -33,6 +43,7 @@ object InternalFormTranslator {
       case lv: LocalVar => VarTerm(lv.name, lv.typ)
       case add: Add => AddTerm(expToTerm(add.left), expToTerm(add.right))
       case add: Sub => SubTerm(expToTerm(add.left), expToTerm(add.right))
+      case frac: FractionalPerm => PermFracTerm(expToTerm(frac.left), expToTerm(frac.right))
       case _: EqCmp => expToLogicTerm(exp)
       case _: NeCmp => expToLogicTerm(exp)
       case _: LtCmp => expToLogicTerm(exp)
@@ -44,6 +55,8 @@ object InternalFormTranslator {
       case _: And => expToLogicTerm(exp)
       case _: Or => expToLogicTerm(exp)
       case _: Implies => expToLogicTerm(exp)
+      case _: FieldAccessPredicate => expToLogicTerm(exp)
+      case _: PredicateAccessPredicate => expToLogicTerm(exp)
       case v => throw new IllegalArgumentException(s"Unable to transform ${v.getClass.getCanonicalName} to term!")
     }
   }
@@ -62,11 +75,13 @@ object InternalFormTranslator {
       case and: And => AndTerm(expToLogicTerm(and.left), expToLogicTerm(and.right))
       case or: Or => OrTerm(expToLogicTerm(or.left), expToLogicTerm(or.right))
       case impl: Implies => ImplTerm(expToLogicTerm(impl.left), expToLogicTerm(impl.right))
+      case acc: FieldAccessPredicate => PredFieldAccTerm(expToTerm(acc.loc).asInstanceOf[FieldAccTerm], expToTerm(acc.perm))
+      case acc: PredicateAccessPredicate => PredInstAccTerm(PredInst(acc.loc.predicateName, acc.loc.args.map(expToTerm)), expToTerm(acc.perm))
       case v => throw new IllegalArgumentException(s"Unable to transform ${v.getClass.getCanonicalName} to logic term!")
     }
   }
 
-  def translateStmtToInternalForm(rep: InternalRepresentation, prev: Set[Ident], defs: Map[String, PredDef], stmt: Stmt): (Stmt, Set[Ident]) = {
+  def translateStmtToInternalForm(rep: InternalRepresentation, prev: Set[Ident], defs: Map[String, PredDef], stmt: Stmt): (Stmt, Ident, Set[Ident]) = {
     stmt match {
       case NewStmt(lhs, fields) => {
 
@@ -85,7 +100,7 @@ object InternalFormTranslator {
         rep.addLine(line)
         rep.addConnections(prev, ln)
 
-        (stmt, Set(ln))
+        (stmt, ln, Set(ln))
       }
       case assign: AbstractAssign => assign match {
         case LocalVarAssign(lhs, rhs) => {
@@ -101,7 +116,7 @@ object InternalFormTranslator {
           rep.addLine(line)
           rep.addConnections(prev, ln)
 
-          (Seqn(Seq(inj, stmt), Seq())(), Set(ln))
+          (Seqn(Seq(inj, stmt), Seq())(), ln, Set(ln))
         }
         case FieldAssign(lhs, rhs) => {
           val inj = freshInjection()
@@ -113,67 +128,19 @@ object InternalFormTranslator {
             expToTerm(rhs)
           )
 
-          rep.addLine(line)
-          rep.addConnections(prev, ln)
+          rep.introduce(prev, line)
 
-          (Seqn(Seq(inj, stmt), Seq())(), Set(ln))
+          (Seqn(Seq(inj, stmt), Seq())(), ln, Set(ln))
         }
       }
       case MethodCall(methodName, args, targets) => {
-        //        MethodCallLine(
-        //          targets.map(t => Var(t.name, t.typ)),
-        //          methodName,
-        //          args.map(a => expToTerm(a))
-        //        )
-        // TODO: remove knowledge about the passed arguments
-
         val inj = freshInjection()
-
-        //        val meth = this.program.methods.find(m => m.name.equals(methodName))
-        //          .get
-        //
-        //        val argRepl = meth.formalArgs.map(d => Var(d.name, d.typ)).zip(args.map(expToTerm))
-        //
-        //        val exhales = meth.pres.map(p => expToPredTerm(p))
-        //          .map(t => t.substitute(TermSub(argRepl.toMap)))
-        //          .map(v => ExhaleLine(inj, v))
-        //
-        //        val retRepl = meth.formalReturns.map(v => Var(v.name, v.typ)).zip(targets.map(v => Var(v.name, v.typ)))
-        //
-        //        val inhales = meth.posts.map(p => expToPredTerm(p))
-        //          .map(t => t.substitute(TermSub((argRepl ++ retRepl).toMap)))
-        //          .map(v => InhaleLine(v))
-        //
-        //        val reqs = this.program.inferInfo.typeAnnotations(methodName)
-        //        val argNames = this.program.methods.filter(m => m.name.equals(methodName)).head.formalArgs.map(f => f.name)
-        //        val paramedExhaling: Seq[ExhaleLine] = reqs._1.zip(argNames).flatMap(t => t._1 match {
-        //          case dt: DatatypeType => {
-        //            val name = encodeTypeAsString(dt)
-        //            val term = PredImpl(Set(IsNonNull(Var(t._2, Ref))), PredPredAcc(PredInstance(name, Seq(Var(t._2, Ref)))))
-        //            Seq(ExhaleLine(inj, term.substitute(TermSub((argRepl ++ retRepl).toMap))))
-        //          }
-        //          case _ => Seq()
-        //        })
-        //
-        //        val retNames = this.program.methods.filter(m => m.name.equals(methodName)).head.formalReturns.map(f => f.name)
-        //        val paramedInhaling = reqs._2.zip(retNames).flatMap(t => t._1 match {
-        //          case dt: DatatypeType => {
-        //            val name = encodeTypeAsString(dt)
-        //            val term = PredPredAcc(PredInstance(name, Seq(Var(t._2, Ref))))
-        //            Seq(InhaleLine(term.substitute(TermSub(argRepl.toMap))))
-        //          }
-        //          case _ => Seq()
-        //        })
-        //
-        //        val line = Sequence(((paramedExhaling ++ exhales).reverse) ++ paramedInhaling ++ inhales)
-        //        println(s"LINE FOR METH CALL: ${line}")
-
         val ln = rep.freshIdent()
         val line = CallLine(ln, inj, methodName, targets.map(v => VarTerm(v.name, v.typ)), args.map(expToTerm))
 
         rep.introduce(prev, line)
 
-        (Seqn(Seq(inj, stmt), Seq())(), Set(ln))
+        (Seqn(Seq(inj, stmt), Seq())(), ln, Set(ln))
       }
       case Exhale(exp) => {
         val inj = freshInjection()
@@ -182,13 +149,13 @@ object InternalFormTranslator {
 
         rep.introduce(prev, line)
 
-        (Seqn(Seq(inj, stmt), Seq())(), Set(ln))
+        (Seqn(Seq(inj, stmt), Seq())(), ln, Set(ln))
       }
       case Inhale(exp) => {
         val ln = rep.freshIdent()
         val line = InhaleLine(ln, expToLogicTerm(exp))
         rep.introduce(prev, line)
-        (stmt, Set(ln))
+        (stmt, ln, Set(ln))
       }
       case Assert(exp) => {
         val ln = rep.freshIdent()
@@ -197,13 +164,13 @@ object InternalFormTranslator {
 
         rep.introduce(prev, line)
 
-        (Seqn(Seq(inj, stmt), Seq())(), Set(ln))
+        (Seqn(Seq(inj, stmt), Seq())(), ln, Set(ln))
       }
       case Assume(exp) => {
         val ln = rep.freshIdent()
         val line = AssumeLine(ln, expToLogicTerm(exp))
         rep.introduce(prev, line)
-        (stmt, Set(ln))
+        (stmt, ln, Set(ln))
       }
       case Fold(acc) => {
         val inj = freshInjection()
@@ -221,7 +188,7 @@ object InternalFormTranslator {
         rep.introduce(Set(exLn), in)
 
 
-        (Seqn(Seq(inj, stmt), Seq())(), Set(inLn))
+        (Seqn(Seq(inj, stmt), Seq())(), exLn, Set(inLn))
       }
       case Unfold(acc) => {
         val inj = freshInjection()
@@ -232,14 +199,14 @@ object InternalFormTranslator {
 
 
         val exLn = rep.freshIdent()
-        val ex = ExhaleLine(exLn, inj, body)
+        val ex = ExhaleLine(exLn, inj, folded)
         val inLn = rep.freshIdent()
-        val in = InhaleLine(inLn, folded)
+        val in = InhaleLine(inLn, body)
 
         rep.introduce(prev, ex)
         rep.introduce(Set(exLn), in)
 
-        (Seqn(Seq(inj, stmt), Seq())(), Set(inLn))
+        (Seqn(Seq(inj, stmt), Seq())(), exLn, Set(inLn))
       }
 
       case seq: Seqn => transformSeqnToInternalForm(rep, prev, defs, seq, None)
@@ -251,28 +218,40 @@ object InternalFormTranslator {
 
         val ln = rep.freshIdent()
 
-        val line = BranchLine(
-          ln,
-          inj,
-          translatedCondition
-        )
-
-        rep.introduce(prev, line)
-
         // TODO: maybe remove the injections at this point since they should be covered by the pre cond inj
         val firstInj = freshInjection()
         val secondInj = freshInjection()
         val thnTrans = transformSeqnToInternalForm(rep, Set(ln), defs, thn, Some(firstInj))
         val elsTrans = transformSeqnToInternalForm(rep, Set(ln), defs, els, Some(secondInj))
 
+        val line = BranchLine(
+          ln,
+          inj,
+          translatedCondition,
+          thnTrans._2,
+          elsTrans._2
+        )
+
+        rep.introduce(prev, line)
+
         val transIf = If(cond, thnTrans._1, elsTrans._1)(i.pos, i.info, i.errT)
 
-        (Seqn(Seq(inj, transIf), Seq())(), thnTrans._2.union(elsTrans._2))
+        (Seqn(Seq(inj, transIf), Seq())(), ln, thnTrans._3.union(elsTrans._3))
       }
     }
   }
 
   def instantiatePredicateFolding(defs: Map[String, PredDef], pred: PredicateAccessPredicate): (LogicTerm, LogicTerm) = {
-    (???, ???)
+    val predDef = defs(pred.loc.predicateName)
+    val args = pred.loc.args.map(expToTerm)
+    val init = predDef.params.zip(args).toMap
+    // TODO: implement multiplication with permission amount when inhaling/exhaling (especially in the body)
+    val ts = FuncTermSub {
+      case v: VarTerm => init.getOrElse(v.name, v)
+      case t => t
+    }
+    val instBody = predDef.body.substitute(ts).asInstanceOf[LogicTerm]
+    val predInst = PredInst(predDef.name, args)
+    (PredInstAccTerm(predInst, PermAmount.WRITE), instBody)
   }
 }
