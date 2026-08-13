@@ -1,6 +1,6 @@
 package viper.silver.inference.v3.ast
 
-import viper.silver.ast.{Exp, FieldAssign, Injection, LocalVarAssign, MethodCall}
+import viper.silver.ast.Injection
 import viper.silver.inference.v3.Counter
 
 import scala.collection.mutable
@@ -66,6 +66,10 @@ case class CallLine(ln: Ident, inj: Injection, method: String, targets: Seq[VarT
   }
 }
 
+case class InternalMethod(method: String, pres: Seq[LogicTerm], posts: Seq[LogicTerm], start: Ident, stop: Set[Ident], rep: InternalRepresentation) {
+
+}
+
 case class InternalRepresentation(counter: Counter, lines: mutable.HashMap[Ident, Line], mesh: mutable.HashMap[Ident, mutable.HashSet[Ident]]) {
   def this() = {
     this(Counter(0), new mutable.HashMap(), new mutable.HashMap())
@@ -97,8 +101,11 @@ case class InternalRepresentation(counter: Counter, lines: mutable.HashMap[Ident
 
   def pretty(): String = {
     val barrier = "%" * 100
-    val linesPretty = this.lines.toSeq.sortBy(l => l._1.value).map(e => "\t" + e._2.pretty()).mkString("\n")
-    val meshPretty = this.mesh.toSeq.sortBy(e => e._1.value).map(e => s"\t${e._1.pretty()}  ==>  ${e._2.map(v => v.pretty()).mkString(", ")}").mkString("\n")
+    val linesPretty = this.lines.toSeq.sortBy(l => l._1.value)
+      .map(e => "\t" + e._2.pretty()).mkString("\n")
+    val meshPretty = this.mesh.toSeq.sortBy(e => e._1.value)
+      .map(e => s"\t${e._1.pretty()}  ==>  ${e._2.map(_.pretty()).mkString(", ")}")
+      .mkString("\n")
     s"${barrier}\ncurrent counter: ${counter.value}\nlines:\n${linesPretty}\nmesh:\n${meshPretty}\n${barrier}"
   }
 }

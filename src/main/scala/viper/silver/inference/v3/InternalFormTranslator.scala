@@ -57,6 +57,8 @@ object InternalFormTranslator {
       case _: Implies => expToLogicTerm(exp)
       case _: FieldAccessPredicate => expToLogicTerm(exp)
       case _: PredicateAccessPredicate => expToLogicTerm(exp)
+      case _: Unfolding => expToLogicTerm(exp)
+      case _: FullPerm => PermFracTerm(IntTerm(1), IntTerm(1))
       case v => throw new IllegalArgumentException(s"Unable to transform ${v.getClass.getCanonicalName} to term!")
     }
   }
@@ -77,7 +79,9 @@ object InternalFormTranslator {
       case impl: Implies => ImplTerm(expToLogicTerm(impl.left), expToLogicTerm(impl.right))
       case acc: FieldAccessPredicate => PredFieldAccTerm(expToTerm(acc.loc).asInstanceOf[FieldAccTerm], expToTerm(acc.perm))
       case acc: PredicateAccessPredicate => PredInstAccTerm(PredInst(acc.loc.predicateName, acc.loc.args.map(expToTerm)), expToTerm(acc.perm))
-      case v => throw new IllegalArgumentException(s"Unable to transform ${v.getClass.getCanonicalName} to logic term!")
+      // TODO: support unfolding instructions
+      case uf: Unfolding => BoolTerm(true)
+      case v => throw new IllegalArgumentException(s"Unable to transform ${v.getClass.getCanonicalName} to logic term! ${exp}")
     }
   }
 
@@ -253,5 +257,17 @@ object InternalFormTranslator {
     val instBody = predDef.body.substitute(ts).asInstanceOf[LogicTerm]
     val predInst = PredInst(predDef.name, args)
     (PredInstAccTerm(predInst, PermAmount.WRITE), instBody)
+  }
+
+  def processToInternalForm(defs: Map[String, PredDef], m: Method): InternalMethod = {
+    val rep = new InternalRepresentation()
+    val start = rep.freshIdent()
+    val prev = Set(start)
+    val res = InternalFormTranslator.transformSeqnToInternalForm(rep, prev, defs, m.bodyOrAssumeFalse, None)
+
+    val pres = m.pres.map(expToLogicTerm)
+    val posts = m.posts.map(expToLogicTerm)
+
+    InternalMethod(m.name, pres, posts, start, res._3, rep)
   }
 }
