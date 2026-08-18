@@ -265,9 +265,11 @@ object InternalFormTranslator {
     val prev = Set(start)
     val res = InternalFormTranslator.transformSeqnToInternalForm(rep, prev, defs, m.bodyOrAssumeFalse, None)
 
+    val args = m.formalArgs.map(a => (a.name, a.typ))
+
     val pres = m.pres.map(expToLogicTerm)
     val posts = m.posts.map(expToLogicTerm)
 
-    InternalMethod(m.name, pres, posts, start, res._3, rep)
+    InternalMethod(m.name, args, pres, posts, start, res._3, rep)
   }
 }

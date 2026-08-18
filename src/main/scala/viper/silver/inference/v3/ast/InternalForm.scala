@@ -1,6 +1,6 @@
 package viper.silver.inference.v3.ast
 
-import viper.silver.ast.Injection
+import viper.silver.ast.{Injection, Type}
 import viper.silver.inference.v3.Counter
 
 import scala.collection.mutable
@@ -66,7 +66,7 @@ case class CallLine(ln: Ident, inj: Injection, method: String, targets: Seq[VarT
   }
 }
 
-case class InternalMethod(method: String, pres: Seq[LogicTerm], posts: Seq[LogicTerm], start: Ident, stop: Set[Ident], rep: InternalRepresentation) {
+case class InternalMethod(method: String, args: Seq[(String, Type)], pres: Seq[LogicTerm], posts: Seq[LogicTerm], start: Ident, stop: Set[Ident], rep: InternalRepresentation) {
 
 }
 
@@ -82,6 +82,9 @@ case class InternalRepresentation(counter: Counter, lines: mutable.HashMap[Ident
 
   def addLine(line: Line): Unit = {
     this.lines.put(line.ln, line)
+    if (!this.mesh.contains(line.ln)) {
+      this.mesh.put(line.ln, new mutable.HashSet())
+    }
   }
 
   def addConnections(from: Set[Ident], to: Ident): Unit = {
