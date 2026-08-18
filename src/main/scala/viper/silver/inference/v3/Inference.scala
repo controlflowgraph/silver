@@ -313,17 +313,27 @@ case class ValRef(id: Int) {
   }
 }
 
-case class Assignment(variables: Map[String, ValRef]) {
-  def this() = {
-    this(Map())
+case class Assignment(rc: RefCounter, variables: Map[String, ValRef]) {
+  def this(rc: RefCounter) = {
+    this(rc, Map())
   }
 
   def assign(name: String, ref: ValRef): Assignment = {
-    Assignment(this.variables.updated(name, ref))
+    Assignment(this.rc, this.variables.updated(name, ref))
   }
 
   def pretty(): String = {
     this.variables.map(e => s"${e._1}: ${e._2.pretty()}").mkString("\n")
+  }
+
+  def lookup(name: String): (Assignment, ValRef) = {
+    if (this.variables.contains(name)) {
+      (this, this.variables(name))
+    }
+    else{
+      val fresh = this.rc.freshValRef()
+      (Assignment(this.rc, this.variables.updated(name, fresh)), fresh)
+    }
   }
 }
 
@@ -335,19 +345,41 @@ case class RefCounter(counter: Counter) {
 }
 
 case class Obj(ref: ValRef, fields: Map[String, ValRef]) {
-  def lookup(counter: Counter, field: String) = {
-
+  def assign(field: String, ref: ValRef): Obj = {
+    Obj(this.ref, this.fields.updated(field, ref))
   }
 }
 
-case class Heap(objMap: Map[ValRef, Obj]) {
+case class Heap(rc: RefCounter, objMap: Map[ValRef, Obj]) {
 
-  def this() = {
-    this(Map())
+  def this(rc: RefCounter) = {
+    this(rc, Map())
+  }
+
+  def lookup(ref: ValRef): (Heap, Obj) = {
+    if(this.objMap.contains(ref)) {
+      (this, this.objMap(ref))
+    }
+    else {
+      val fresh = Obj(ref, Map())
+      (Heap(this.rc, this.objMap.updated(ref, fresh)), fresh)
+    }
   }
 
   def pretty(): String = {
     this.objMap.values.map(o => s"${o.ref.pretty()}: ${o.fields.map(e => s"${e._1}: ${e._2.pretty()}").mkString("\n").indent(2)}".indent(2)).mkString("\n")
+  }
+
+  def lookupField(r: ValRef, field: String): (Heap, ValRef) = {
+    val (h, o) = lookup(r)
+    if(o.fields.contains(field)){
+      (h, o.fields(field))
+    }
+    else {
+      val fresh = this.rc.freshValRef()
+      val uo = o.assign(field, fresh)
+      (Heap(this.rc, this.objMap.updated(r, uo)), fresh)
+    }
   }
 }
 
@@ -447,14 +479,14 @@ case class DNF(clauses: Set[Set[Comparison]]) {
   }
 }
 
-case class KnowledgeBase(assignment: Assignment, heap: Heap, direct: DirectPermissionMask, folded: FoldedPermissionMask, facts: DNF) {
+case class KnowledgeBase(assignment: Assignment, heap: Heap, direct: DirectPermissionMask, folded: FoldedPermissionMask, info: DNF) {
 
   def prove(term: LogicTerm): Boolean = {
     false
   }
 
   def update(f: Assignment => Heap => DirectPermissionMask => FoldedPermissionMask => DNF => (Assignment, Heap, DirectPermissionMask, FoldedPermissionMask, DNF)): KnowledgeBase = {
-    val res = f(this.assignment)(this.heap)(this.direct)(this.folded)(this.facts)
+    val res = f(this.assignment)(this.heap)(this.direct)(this.folded)(this.info)
     KnowledgeBase(res._1, res._2, res._3, res._4, res._5)
   }
 
@@ -463,7 +495,7 @@ case class KnowledgeBase(assignment: Assignment, heap: Heap, direct: DirectPermi
     val prettyAssignment = this.assignment.pretty().indent(2)
     val prettyDirect = this.direct.pretty().indent(2)
     val prettyFolded = this.folded.pretty().indent(2)
-    val prettyDNF = this.facts.pretty().indent(2)
+    val prettyDNF = this.info.pretty().indent(2)
     s"assignment:\n$prettyAssignment\nheap:\n$prettyHeap\ndirect:\n$prettyDirect\nfolded:\n$prettyFolded\nfacts:\n$prettyDNF"
   }
 
@@ -577,6 +609,16 @@ case class KnowledgeBase(assignment: Assignment, heap: Heap, direct: DirectPermi
 
       (a, h, ud, uf, ui)
     })
+  }
+
+  def substituteRef(ref: ValRef, fresh: ValRef): KnowledgeBase = {
+    KnowledgeBase(
+      this.assignment,
+      this.heap,
+      this.direct,
+      this.folded,
+      this.info
+    )
   }
 }
 
@@ -827,13 +869,180 @@ case class Inference(defs: Map[String, PredDef], reps: Map[String, InternalMetho
     strats.foldLeft(before)(applyRefoldingStrategy)
   }
 
+  // TODO: maybe simplify the value ref computation and return option val ref to signal that a primitive type is returned
+  private def computeValueRef(assignment: Assignment, heap: Heap, term: Term): (Assignment, Heap, ValRef) = {
+    term match {
+      case FieldAccTerm(src, field, typ) => {
+        val (a, h, r) = computeValueRef(assignment, heap, src)
+        val (hp, v) = h.lookupField(r, field)
+        (a, hp, v)
+      }
+      case AddTerm(left, right) => {
+        val (a1, h1, r1) = computeValueRef(assignment, heap, left)
+        val (a2, h2, r2) = computeValueRef(a1, h1, right)
+
+        val fresh = h2.rc.freshValRef()
+        // TODO: record the equivalent constraints to specify the equivalences and retain as much knowledge
+        // EqConst(AddRefs(r1, r2), fresh)
+
+        (a2, h2, fresh)
+      }
+      case IntTerm(value) => {
+        val fresh = heap.rc.freshValRef()
+
+        (assignment, heap, fresh)
+      }
+      case AndTerm(left, right) => {
+        val (a1, h1, r1) = computeValueRef(assignment, heap, left)
+        val (a2, h2, r2) = computeValueRef(a1, h1, right)
+
+        val fresh = h2.rc.freshValRef()
+        // TODO: record the equivalent constraints to specify the equivalences and retain as much knowledge
+        // EqConst(AndRefs(r1, r2), fresh)
+
+        (a2, h2, fresh)
+      }
+      case NegTerm(t) => {
+        val (a1, h1, r1) = computeValueRef(assignment, heap, t)
+
+        val fresh = heap.rc.freshValRef()
+
+        (a1, h1, fresh)
+      }
+      case NullTerm() => {
+        val fresh = heap.rc.freshValRef()
+
+        (assignment, heap, fresh)
+      }
+      case PermFracTerm(left, right) => {
+        val (a1, h1, r1) = computeValueRef(assignment, heap, left)
+        val (a2, h2, r2) = computeValueRef(a1, h1, right)
+
+        val fresh = h2.rc.freshValRef()
+        // TODO: record the equivalent constraints to specify the equivalences and retain as much knowledge
+        // EqConst(PermFracRefs(r1, r2), fresh)
+
+        (a2, h2, fresh)
+      }
+      case SubTerm(left, right) => {
+        val (a1, h1, r1) = computeValueRef(assignment, heap, left)
+        val (a2, h2, r2) = computeValueRef(a1, h1, right)
+
+        val fresh = h2.rc.freshValRef()
+        // TODO: record the equivalent constraints to specify the equivalences and retain as much knowledge
+        // EqConst(SubRefs(r1, r2), fresh)
+
+        (a2, h2, fresh)
+      }
+      case BoolTerm(value) => {
+        val fresh = heap.rc.freshValRef()
+
+        (assignment, heap, fresh)
+      }
+      case EqCmpTerm(left, right) => {
+        val (a1, h1, r1) = computeValueRef(assignment, heap, left)
+        val (a2, h2, r2) = computeValueRef(a1, h1, right)
+
+        val fresh = h2.rc.freshValRef()
+        // TODO: record the equivalent constraints to specify the equivalences and retain as much knowledge
+        // EqConst(AddRefs(r1, r2), fresh)
+
+        (a2, h2, fresh)
+      }
+      case GreaterCmpTerm(left, right) => {
+        val (a1, h1, r1) = computeValueRef(assignment, heap, left)
+        val (a2, h2, r2) = computeValueRef(a1, h1, right)
+
+        val fresh = h2.rc.freshValRef()
+        // TODO: record the equivalent constraints to specify the equivalences and retain as much knowledge
+        // EqConst(AddRefs(r1, r2), fresh)
+
+        (a2, h2, fresh)
+      }
+      case GreaterEqCmpTerm(left, right) => {
+        val (a1, h1, r1) = computeValueRef(assignment, heap, left)
+        val (a2, h2, r2) = computeValueRef(a1, h1, right)
+
+        val fresh = h2.rc.freshValRef()
+        // TODO: record the equivalent constraints to specify the equivalences and retain as much knowledge
+        // EqConst(AddRefs(r1, r2), fresh)
+
+        (a2, h2, fresh)
+      }
+      case LessCmpTerm(left, right) => {
+        val (a1, h1, r1) = computeValueRef(assignment, heap, left)
+        val (a2, h2, r2) = computeValueRef(a1, h1, right)
+
+        val fresh = h2.rc.freshValRef()
+        // TODO: record the equivalent constraints to specify the equivalences and retain as much knowledge
+        // EqConst(AddRefs(r1, r2), fresh)
+
+        (a2, h2, fresh)
+      }
+      case LessEqCmpTerm(left, right) => {
+        val (a1, h1, r1) = computeValueRef(assignment, heap, left)
+        val (a2, h2, r2) = computeValueRef(a1, h1, right)
+
+        val fresh = h2.rc.freshValRef()
+        // TODO: record the equivalent constraints to specify the equivalences and retain as much knowledge
+        // EqConst(AddRefs(r1, r2), fresh)
+
+        (a2, h2, fresh)
+      }
+      case NotEqCmpTerm(left, right) => {
+        val (a1, h1, r1) = computeValueRef(assignment, heap, left)
+        val (a2, h2, r2) = computeValueRef(a1, h1, right)
+
+        val fresh = h2.rc.freshValRef()
+        // TODO: record the equivalent constraints to specify the equivalences and retain as much knowledge
+        // EqConst(AddRefs(r1, r2), fresh)
+
+        (a2, h2, fresh)
+      }
+      case NotTerm(t) => {
+        val (a1, h1, r1) = computeValueRef(assignment, heap, t)
+
+        val fresh = heap.rc.freshValRef()
+
+        (a1, h1, fresh)
+      }
+      case OrTerm(left, right) => {
+        val (a1, h1, r1) = computeValueRef(assignment, heap, left)
+        val (a2, h2, r2) = computeValueRef(a1, h1, right)
+
+        val fresh = h2.rc.freshValRef()
+        // TODO: record the equivalent constraints to specify the equivalences and retain as much knowledge
+        // EqConst(AddRefs(r1, r2), fresh)
+
+        (a2, h2, fresh)
+      }
+      case VarTerm(name, _) => {
+        val (a, r) = assignment.lookup(name)
+        (a, heap, r)
+      }
+      case MulTerm(left, right) => {
+        val (a1, h1, r1) = computeValueRef(assignment, heap, left)
+        val (a2, h2, r2) = computeValueRef(a1, h1, right)
+
+        val fresh = h2.rc.freshValRef()
+        // TODO: record the equivalent constraints to specify the equivalences and retain as much knowledge
+        // EqConst(AddRefs(r1, r2), fresh)
+
+        (a2, h2, fresh)
+      }
+      case t => {
+        throw new IllegalArgumentException(s"Unable to compute value ref of type ${t.getClass.getCanonicalName}")
+      }
+    }
+  }
+
   def processLine(before: KnowledgeBase, line: Line): KnowledgeBase = {
     line match {
       //      case AssertLine(ln, inj, exp) =>
       //      case AssumeLine(ln, exp) =>
       //      case BranchLine(ln, pre, cond, thn, els) =>
       //      case CallLine(ln, inj, method, targets, args) =>
-      //      case ExhaleLine(ln, inj, exp) =>
+//      case ExhaleLine(ln, inj, exp) =>
       case FieldAssignLine(ln, inj, fa, value) => {
         // TODO: ensure that all requirements are satisfied/permissions are available(provable)
         // TODO: if needed add unfolding statements for the permissions
@@ -852,11 +1061,20 @@ case class Inference(defs: Map[String, PredDef], reps: Map[String, InternalMetho
         val stratsValue = reqsValue.map(v => (v, before.findUnfoldingStrategy(this.defs, v)))
         //          .foreach(s => println(s"${s._1.pretty()} => ${s._2}"))
 
+
+
         // apply all the unfolding strategies
         // this can be refined with better implementations at some point in time :)
         val combinedStrats = (stratsTarget ++ stratsValue).flatMap(v => v._2).toSeq
 
-        applyStrategies(before, combinedStrats)
+        val kb = applyStrategies(before, combinedStrats)
+
+        val (a1, h1, r1) = computeValueRef(kb.assignment, kb.heap, value)
+        val (a2, h2, r2) = computeValueRef(a1, h1, fa)
+        val updatedKb = KnowledgeBase(a2, h2, kb.direct, kb.folded, kb.info)
+        val fresh = a2.rc.freshValRef()
+        // TODO: continue here
+        updatedKb.substituteRef(r2, fresh)
       }
       case InhaleLine(ln, exp) => {
         val folded = PredicateCollector.collectFoldedPredicates(exp, before)
@@ -878,13 +1096,10 @@ case class Inference(defs: Map[String, PredDef], reps: Map[String, InternalMetho
 
   def infer(meth: InternalMethod) = {
     // TODO: add multiplication processing to the term rewriter
-    val counter = Counter(0)
     val knowledge = mutable.HashMap[Ident, KnowledgeBase]()
-    val initAssignment = meth.args.foldLeft(new Assignment())((a, f) => a.assign(f._1, {
-      val c = counter.next()
-      ValRef(c)
-    }))
-    knowledge.put(meth.start, KnowledgeBase(initAssignment, new Heap(), new DirectPermissionMask(), new FoldedPermissionMask(), DNF(Set(Set()))))
+    val counter = RefCounter(Counter(0))
+    val initAssignment = meth.args.foldLeft(new Assignment(counter))((a, f) => a.assign(f._1, counter.freshValRef()))
+    knowledge.put(meth.start, KnowledgeBase(initAssignment, new Heap(counter), new DirectPermissionMask(), new FoldedPermissionMask(), DNF(Set(Set()))))
 
     val mesh = meth.rep.mesh
     val lines = meth.rep.lines
