@@ -221,6 +221,8 @@ trait Comparison {
   def negate(): Comparison
 
   def pretty(): String
+
+  def subst(ts: TermSub): Comparison
 }
 
 case class EqCmpTerm(a: Term, b: Term) extends LogicTerm with Comparison {
@@ -229,6 +231,13 @@ case class EqCmpTerm(a: Term, b: Term) extends LogicTerm with Comparison {
       this.a.substitute(ts),
       this.b.substitute(ts)
     ))
+  }
+
+  def subst(ts: TermSub): Comparison ={
+    EqCmpTerm(
+      this.a.substitute(ts),
+      this.b.substitute(ts)
+    )
   }
 
   def pretty(): String = {
@@ -246,6 +255,14 @@ case class NotEqCmpTerm(a: Term, b: Term) extends LogicTerm with Comparison {
     ))
   }
 
+  def subst(ts: TermSub): Comparison ={
+    NotEqCmpTerm(
+      this.a.substitute(ts),
+      this.b.substitute(ts)
+    )
+  }
+
+
   def pretty(): String = {
     s"${this.a.pretty()} != ${this.b.pretty()}"
   }
@@ -260,6 +277,14 @@ case class LessCmpTerm(a: Term, b: Term) extends LogicTerm with Comparison {
       this.b.substitute(ts)
     ))
   }
+
+  def subst(ts: TermSub): Comparison ={
+    LessCmpTerm(
+      this.a.substitute(ts),
+      this.b.substitute(ts)
+    )
+  }
+
 
   def pretty(): String = {
     s"${this.a.pretty()} <  ${this.b.pretty()}"
@@ -276,6 +301,15 @@ case class LessEqCmpTerm(a: Term, b: Term) extends LogicTerm with Comparison {
     ))
   }
 
+
+  def subst(ts: TermSub): Comparison ={
+    LessEqCmpTerm(
+      this.a.substitute(ts),
+      this.b.substitute(ts)
+    )
+  }
+
+
   def pretty(): String = {
     s"${this.a.pretty()} <= ${this.b.pretty()}"
   }
@@ -291,6 +325,14 @@ case class GreaterCmpTerm(a: Term, b: Term) extends LogicTerm with Comparison {
     ))
   }
 
+  def subst(ts: TermSub): Comparison ={
+    GreaterCmpTerm(
+      this.a.substitute(ts),
+      this.b.substitute(ts)
+    )
+  }
+
+
   def pretty(): String = {
     s"${this.a.pretty()} >  ${this.b.pretty()}"
   }
@@ -305,6 +347,14 @@ case class GreaterEqCmpTerm(a: Term, b: Term) extends LogicTerm with Comparison 
       this.b.substitute(ts)
     ))
   }
+
+  def subst(ts: TermSub): Comparison ={
+    GreaterEqCmpTerm(
+      this.a.substitute(ts),
+      this.b.substitute(ts)
+    )
+  }
+
 
   def pretty(): String = {
     s"${this.a.pretty()} >= ${this.b.pretty()}"

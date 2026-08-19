@@ -330,7 +330,7 @@ case class Assignment(rc: RefCounter, variables: Map[String, ValRef]) {
     if (this.variables.contains(name)) {
       (this, this.variables(name))
     }
-    else{
+    else {
       val fresh = this.rc.freshValRef()
       (Assignment(this.rc, this.variables.updated(name, fresh)), fresh)
     }
@@ -357,7 +357,7 @@ case class Heap(rc: RefCounter, objMap: Map[ValRef, Obj]) {
   }
 
   def lookup(ref: ValRef): (Heap, Obj) = {
-    if(this.objMap.contains(ref)) {
+    if (this.objMap.contains(ref)) {
       (this, this.objMap(ref))
     }
     else {
@@ -367,12 +367,12 @@ case class Heap(rc: RefCounter, objMap: Map[ValRef, Obj]) {
   }
 
   def pretty(): String = {
-    this.objMap.values.map(o => s"${o.ref.pretty()}: ${o.fields.map(e => s"${e._1}: ${e._2.pretty()}").mkString("\n").indent(2)}".indent(2)).mkString("\n")
+    this.objMap.values.map(o => s"${o.ref.pretty()}:\n${o.fields.map(e => s"${e._1}: ${e._2.pretty()}").mkString("\n").indent(2)}".indent(2)).mkString("\n")
   }
 
   def lookupField(r: ValRef, field: String): (Heap, ValRef) = {
     val (h, o) = lookup(r)
-    if(o.fields.contains(field)){
+    if (o.fields.contains(field)) {
       (h, o.fields(field))
     }
     else {
@@ -380,6 +380,10 @@ case class Heap(rc: RefCounter, objMap: Map[ValRef, Obj]) {
       val uo = o.assign(field, fresh)
       (Heap(this.rc, this.objMap.updated(r, uo)), fresh)
     }
+  }
+
+  def assignField(r: ValRef, field: String, v: ValRef): Heap = {
+    Heap(this.rc, this.objMap.updated(r, this.objMap(r).assign(field, v)))
   }
 }
 
@@ -424,6 +428,24 @@ case class DirectPermissionMask(permissions: Map[FieldAccTerm, Term]) {
   def getAmount(pred: FieldAccTerm): Term = {
     this.permissions.getOrElse(pred, PermFracTerm(IntTerm(0), IntTerm(1)))
   }
+
+  def substitute(ts: TermSub): DirectPermissionMask = {
+    DirectPermissionMask(
+      this.permissions.map(e => (
+        FieldAccTerm(e._1.src.substitute(ts), e._1.field, e._1.typ),
+        e._2.substitute(ts))
+      )
+    )
+  }
+
+  def exhale(b: PredFieldAccTerm): DirectPermissionMask = {
+    val before = this.permissions.getOrElse(b.exp, PermFracTerm(IntTerm(0), IntTerm(1)))
+    val beforeSimp = SubTerm(before, b.perm)
+    val afterSimp = TermRewriter.simplify(beforeSimp)
+    DirectPermissionMask(
+      this.permissions.updated(b.exp, afterSimp)
+    )
+  }
 }
 
 case class FoldedPermissionMask(permissions: Map[PredInst, Term]) {
@@ -443,11 +465,24 @@ case class FoldedPermissionMask(permissions: Map[PredInst, Term]) {
     this.permissions.map(e => s"${e._1.pretty()}: ${e._2.pretty()}").mkString("\n")
   }
 
+  def exhale(pa: PredInstAccTerm): FoldedPermissionMask = {
+    exhale(pa.pred, pa.perm)
+  }
+
   def exhale(pred: PredInst, perm: Term): FoldedPermissionMask = {
     val current = this.permissions.getOrElse(pred, PermFracTerm(IntTerm(0), IntTerm(1)))
     val amount = TermRewriter.simplify(SubTerm(current, perm))
     FoldedPermissionMask(
       this.permissions.updated(pred, amount)
+    )
+  }
+
+  def substitute(ts: TermSub): FoldedPermissionMask = {
+    FoldedPermissionMask(
+      this.permissions.map(e => (
+        PredInst(e._1.name, e._1.args.map(a => a.substitute(ts))),
+        e._2.substitute(ts)
+      ))
     )
   }
 }
@@ -476,6 +511,10 @@ case class DNF(clauses: Set[Set[Comparison]]) {
 
   def pretty(): String = {
     this.clauses.map(v => v.map(a => a.pretty()).mkString(" & ")).mkString(" OR \n")
+  }
+
+  def substitute(ts: TermSub): DNF = {
+    DNF(this.clauses.map(c => c.map(i => i.subst(ts))))
   }
 }
 
@@ -513,37 +552,37 @@ case class KnowledgeBase(assignment: Assignment, heap: Heap, direct: DirectPermi
   }
 
   private def searchDepth: Int = 10
-//
-//  private def findContainedFieldPermission(defs: Map[String, PredDef], pred: PredInst, req: FieldAccTerm): Seq[RefoldingStrategy] = {
-//    findContainedFieldPermission(defs, pred, req, 0)
-//  }
-//
-//  private def findContainedFieldPermission(defs: Map[String, PredDef], preds: Seq[PredInstAccTerm], req: FieldAccTerm, currentDepth: Int): Seq[RefoldingStrategy] = {
-//    preds.flatMap(v => findContainedFieldPermission(defs, v.pred, req, currentDepth - 1)
-//      .map(_.scale(v.perm)))
-//  }
-//
-//  private def findContainedFieldPermission(defs: Map[String, PredDef], pred: PredInst, req: FieldAccTerm, currentDepth: Int): Seq[RefoldingStrategy] = {
-//    val res = defs(pred.name)
-//    val argSub = res.params.zip(pred.args).toMap
-//    val ts = FuncTermSub {
-//      case t@VarTerm(v, _) => argSub.getOrElse(v, t)
-//      case v => v
-//    }
-//    val subbed = res.body.substitute(ts).asInstanceOf[LogicTerm]
-//    val base = PredicateCollector.collectDirectPredicates(subbed, this)
-//      .filter(f => f.pred.equals(req))
-//      .map(t => RefoldingStrategy(Seq(RefoldingStep(unfolding = true, pred)), t.perm))
-//    val extended = if (currentDepth < searchDepth) {
-//      val folded = PredicateCollector.collectFoldedPredicates(subbed, this)
-//      findContainedFieldPermission(defs, folded, req, currentDepth - 1)
-//        .map(v => v.prepend(Seq(RefoldingStep(unfolding = true, pred))))
-//    }
-//    else Seq()
-//    // TODO: when unfolding the algorithm would need to consider the pure knowledge that is included in implications
-//    // TODO: the perm amounts for the different
-//    base ++ extended
-//  }
+  //
+  //  private def findContainedFieldPermission(defs: Map[String, PredDef], pred: PredInst, req: FieldAccTerm): Seq[RefoldingStrategy] = {
+  //    findContainedFieldPermission(defs, pred, req, 0)
+  //  }
+  //
+  //  private def findContainedFieldPermission(defs: Map[String, PredDef], preds: Seq[PredInstAccTerm], req: FieldAccTerm, currentDepth: Int): Seq[RefoldingStrategy] = {
+  //    preds.flatMap(v => findContainedFieldPermission(defs, v.pred, req, currentDepth - 1)
+  //      .map(_.scale(v.perm)))
+  //  }
+  //
+  //  private def findContainedFieldPermission(defs: Map[String, PredDef], pred: PredInst, req: FieldAccTerm, currentDepth: Int): Seq[RefoldingStrategy] = {
+  //    val res = defs(pred.name)
+  //    val argSub = res.params.zip(pred.args).toMap
+  //    val ts = FuncTermSub {
+  //      case t@VarTerm(v, _) => argSub.getOrElse(v, t)
+  //      case v => v
+  //    }
+  //    val subbed = res.body.substitute(ts).asInstanceOf[LogicTerm]
+  //    val base = PredicateCollector.collectDirectPredicates(subbed, this)
+  //      .filter(f => f.pred.equals(req))
+  //      .map(t => RefoldingStrategy(Seq(RefoldingStep(unfolding = true, pred)), t.perm))
+  //    val extended = if (currentDepth < searchDepth) {
+  //      val folded = PredicateCollector.collectFoldedPredicates(subbed, this)
+  //      findContainedFieldPermission(defs, folded, req, currentDepth - 1)
+  //        .map(v => v.prepend(Seq(RefoldingStep(unfolding = true, pred))))
+  //    }
+  //    else Seq()
+  //    // TODO: when unfolding the algorithm would need to consider the pure knowledge that is included in implications
+  //    // TODO: the perm amounts for the different
+  //    base ++ extended
+  //  }
 
   def findUnfoldingStrategyInPredicate(defs: Map[String, PredDef], fa: PredFieldAccTerm, instance: PredInstAccTerm): Option[RefoldingStep] = {
     val predDef = defs(instance.pred.name)
@@ -558,7 +597,7 @@ case class KnowledgeBase(assignment: Assignment, heap: Heap, direct: DirectPermi
     val containedOnDirectLevel = direct.exists(v => v.exp.equals(fa.exp))
     val containedOnSubLevel = subs.nonEmpty
 
-    if(containedOnDirectLevel || containedOnSubLevel){
+    if (containedOnDirectLevel || containedOnSubLevel) {
       Some(UnfoldingStep(instance.pred, instance.perm, subs))
     }
     else {
@@ -580,13 +619,13 @@ case class KnowledgeBase(assignment: Assignment, heap: Heap, direct: DirectPermi
       val strats = mapped.flatMap(v => findUnfoldingStrategyInPredicate(defs, fa, v))
       Some(RefoldingStrategy(strats))
 
-//      val res = findContainedFieldPermission(defs, mapped, fa.pred, 0)
-//      println(s"found ${res.length} refolding strategies for ${fa.pretty()}")
-//      res.map(e => RefoldingStrategy(e.steps, TermRewriter.simplify(e.perm)))
-//        .foreach(e => println(e.pretty()))
-//      //        res.flatMap(p => findContainedFieldPermission(defs, p., fa.pred))
-//      //        .foreach(a => println(s"found unfolding strategy: ${fa.pred.pretty()} ${a._1.pretty()}: ${a._2.pretty()}"))
-//      None
+      //      val res = findContainedFieldPermission(defs, mapped, fa.pred, 0)
+      //      println(s"found ${res.length} refolding strategies for ${fa.pretty()}")
+      //      res.map(e => RefoldingStrategy(e.steps, TermRewriter.simplify(e.perm)))
+      //        .foreach(e => println(e.pretty()))
+      //      //        res.flatMap(p => findContainedFieldPermission(defs, p., fa.pred))
+      //      //        .foreach(a => println(s"found unfolding strategy: ${fa.pred.pretty()} ${a._1.pretty()}: ${a._2.pretty()}"))
+      //      None
     }
   }
 
@@ -1042,7 +1081,40 @@ case class Inference(defs: Map[String, PredDef], reps: Map[String, InternalMetho
       //      case AssumeLine(ln, exp) =>
       //      case BranchLine(ln, pre, cond, thn, els) =>
       //      case CallLine(ln, inj, method, targets, args) =>
-//      case ExhaleLine(ln, inj, exp) =>
+      case ExhaleLine(ln, inj, exp) => {
+        // TODO: check that all requirements are satisfied i.e. that all the field/pred permissions are provided
+        //       -> generate and apply refolding strategies
+        val folded = PredicateCollector.collectFoldedPredicates(exp, before)
+        val direct = PredicateCollector.collectDirectPredicates(exp, before)
+        val stripped = PredicateCollector.stripToPure(exp, before)
+        before.update(a => h => d => f => fac => {
+          val ud = direct.foldLeft(d)((a, b) => a.exhale(b))
+          val uf = folded.foldLeft(f)((a, b) => a.exhale(b))
+          val ufac = fac.and(stripped)
+          (a, h, ud, uf, ufac)
+        })
+      }
+      case LocalAssignLine(ln, inj, variable, value) => {
+        // TODO: check that all requirements are satisfied i.e. that all the field/pred permissions are provided
+        //       -> generate and apply refolding strategies
+        val reqsValue = collectRequiredFieldPermissions(value)
+        val stratsValue = reqsValue.map(v => (v, before.findUnfoldingStrategy(this.defs, v)))
+          .flatMap(v => v._2).toSeq
+        val kb = applyStrategies(before, stratsValue)
+
+        val (a2, refBeforeAssign) = before.assignment.lookup(variable.name)
+        val (a3, h3, valRef) = computeValueRef(a2, before.heap, value)
+        val ua = a3.assign(variable.name, valRef)
+
+        val ts = MapTermSub(Map((variable, VarTerm(s"t$$${refBeforeAssign.id}", variable.typ))))
+        KnowledgeBase(
+          ua,
+          h3,
+          kb.direct.substitute(ts),
+          kb.folded.substitute(ts),
+          kb.info.substitute(ts)
+        )
+      }
       case FieldAssignLine(ln, inj, fa, value) => {
         // TODO: ensure that all requirements are satisfied/permissions are available(provable)
         // TODO: if needed add unfolding statements for the permissions
@@ -1062,19 +1134,28 @@ case class Inference(defs: Map[String, PredDef], reps: Map[String, InternalMetho
         //          .foreach(s => println(s"${s._1.pretty()} => ${s._2}"))
 
 
-
         // apply all the unfolding strategies
         // this can be refined with better implementations at some point in time :)
         val combinedStrats = (stratsTarget ++ stratsValue).flatMap(v => v._2).toSeq
 
         val kb = applyStrategies(before, combinedStrats)
 
-        val (a1, h1, r1) = computeValueRef(kb.assignment, kb.heap, value)
-        val (a2, h2, r2) = computeValueRef(a1, h1, fa)
-        val updatedKb = KnowledgeBase(a2, h2, kb.direct, kb.folded, kb.info)
-        val fresh = a2.rc.freshValRef()
-        // TODO: continue here
-        updatedKb.substituteRef(r2, fresh)
+        val (a1, h1, valueRef) = computeValueRef(kb.assignment, kb.heap, value)
+
+        val (a3, h3, objRef) = computeValueRef(a1, h1, fa.src)
+        val (h4, fieldRef) = h3.lookupField(objRef, fa.field)
+        val h5 = h4.assignField(objRef, fa.field, valueRef)
+        // substitute the occurrences of this field usage with a temporary variable that refers to the val ref
+        // TODO: THIS CAUSES PROBLEMS WITH ALIASED PERMISSIONS (e.g. in the make methods)
+        //       INTRODUCE RENAMING SUBSTITUTIONS TO PREVENT THIS STUFF
+        val ts = MapTermSub(Map((fa, VarTerm(s"t$$${fieldRef.id}", fa.typ))))
+        KnowledgeBase(
+          a3,
+          h5,
+          kb.direct.substitute(ts),
+          kb.folded.substitute(ts),
+          kb.info.substitute(ts)
+        )
       }
       case InhaleLine(ln, exp) => {
         val folded = PredicateCollector.collectFoldedPredicates(exp, before)
@@ -1087,7 +1168,6 @@ case class Inference(defs: Map[String, PredDef], reps: Map[String, InternalMetho
           (a, h, ud, uf, ufac)
         })
       }
-        //      case LocalAssignLine(ln, inj, variable, value) =>
       case l => {
         throw new IllegalArgumentException(s"Unable to process line type ${l.getClass.getCanonicalName}")
       }
