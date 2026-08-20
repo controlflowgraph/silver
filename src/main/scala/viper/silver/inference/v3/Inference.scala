@@ -485,6 +485,10 @@ case class FoldedPermissionMask(permissions: Map[PredInst, Term]) {
       ))
     )
   }
+
+  def getAmount(pred: PredInst): Term = {
+    this.permissions.getOrElse(pred, PermFracTerm(IntTerm(0), IntTerm(1)))
+  }
 }
 
 case class DNF(clauses: Set[Set[Comparison]]) {
@@ -551,38 +555,30 @@ case class KnowledgeBase(assignment: Assignment, heap: Heap, direct: DirectPermi
     }
   }
 
+  // TODO: add max search depth to the re/unfolding search
   private def searchDepth: Int = 10
-  //
-  //  private def findContainedFieldPermission(defs: Map[String, PredDef], pred: PredInst, req: FieldAccTerm): Seq[RefoldingStrategy] = {
-  //    findContainedFieldPermission(defs, pred, req, 0)
-  //  }
-  //
-  //  private def findContainedFieldPermission(defs: Map[String, PredDef], preds: Seq[PredInstAccTerm], req: FieldAccTerm, currentDepth: Int): Seq[RefoldingStrategy] = {
-  //    preds.flatMap(v => findContainedFieldPermission(defs, v.pred, req, currentDepth - 1)
-  //      .map(_.scale(v.perm)))
-  //  }
-  //
-  //  private def findContainedFieldPermission(defs: Map[String, PredDef], pred: PredInst, req: FieldAccTerm, currentDepth: Int): Seq[RefoldingStrategy] = {
-  //    val res = defs(pred.name)
-  //    val argSub = res.params.zip(pred.args).toMap
-  //    val ts = FuncTermSub {
-  //      case t@VarTerm(v, _) => argSub.getOrElse(v, t)
-  //      case v => v
-  //    }
-  //    val subbed = res.body.substitute(ts).asInstanceOf[LogicTerm]
-  //    val base = PredicateCollector.collectDirectPredicates(subbed, this)
-  //      .filter(f => f.pred.equals(req))
-  //      .map(t => RefoldingStrategy(Seq(RefoldingStep(unfolding = true, pred)), t.perm))
-  //    val extended = if (currentDepth < searchDepth) {
-  //      val folded = PredicateCollector.collectFoldedPredicates(subbed, this)
-  //      findContainedFieldPermission(defs, folded, req, currentDepth - 1)
-  //        .map(v => v.prepend(Seq(RefoldingStep(unfolding = true, pred))))
-  //    }
-  //    else Seq()
-  //    // TODO: when unfolding the algorithm would need to consider the pure knowledge that is included in implications
-  //    // TODO: the perm amounts for the different
-  //    base ++ extended
-  //  }
+
+  def findUnfoldingStrategyInPredicate(defs: Map[String, PredDef], fa: PredInstAccTerm, instance: PredInstAccTerm): Option[RefoldingStep] = {
+    val predDef = defs(instance.pred.name)
+    val instantiated = predDef.instantiate(instance.pred)
+    // TODO: EXTEND THE KNOWLEDGE WITH THE PURE INFORMATION WHEN UNFOLDING
+    val pure = PredicateCollector.stripToPure(instantiated, this)
+
+    val direct = PredicateCollector.collectDirectPredicates(instantiated, this)
+    val folded = PredicateCollector.collectFoldedPredicates(instantiated, this)
+    val subs = folded.flatMap(v => findUnfoldingStrategyInPredicate(defs, fa, v))
+
+    val containedOnDirectLevel = folded.exists(v => v.pred.equals(fa.pred))
+    val containedOnSubLevel = subs.nonEmpty
+
+    if (containedOnDirectLevel || containedOnSubLevel) {
+      Some(UnfoldingStep(instance.pred, instance.perm, subs))
+    }
+    else {
+      None
+    }
+  }
+
 
   def findUnfoldingStrategyInPredicate(defs: Map[String, PredDef], fa: PredFieldAccTerm, instance: PredInstAccTerm): Option[RefoldingStep] = {
     val predDef = defs(instance.pred.name)
@@ -605,15 +601,28 @@ case class KnowledgeBase(assignment: Assignment, heap: Heap, direct: DirectPermi
     }
   }
 
+  def findUnfoldingStrategy(defs: Map[String, PredDef], fa: PredInstAccTerm): Option[RefoldingStrategy] = {
+    // TODO: check if it is even possible that the permission amount is reachable
+    val directAmount = this.folded.getAmount(fa.pred)
+    if (hasEnoughPermissions(fa.perm, directAmount)) {
+      Some(RefoldingStrategy(Seq()))
+    }
+    else {
+      val mapped: Seq[PredInstAccTerm] = this.folded.permissions.map(e => PredInstAccTerm(e._1, e._2)).toSeq
+
+      val strats = mapped.flatMap(v => findUnfoldingStrategyInPredicate(defs, fa, v))
+      Some(RefoldingStrategy(strats))
+    }
+  }
+
+
   def findUnfoldingStrategy(defs: Map[String, PredDef], fa: PredFieldAccTerm): Option[RefoldingStrategy] = {
     // TODO: check if it is even possible that the permission amount is reachable
     val directAmount = this.direct.getAmount(fa.exp)
     if (hasEnoughPermissions(fa.perm, directAmount)) {
-      println(s"HAS ENOUGH PERMISSIONS FOR: ${fa.pretty()}")
       Some(RefoldingStrategy(Seq()))
     }
     else {
-      // TODO: find the unfolding strategy
       val mapped: Seq[PredInstAccTerm] = this.folded.permissions.map(e => PredInstAccTerm(e._1, e._2)).toSeq
 
       val strats = mapped.flatMap(v => findUnfoldingStrategyInPredicate(defs, fa, v))
@@ -650,6 +659,28 @@ case class KnowledgeBase(assignment: Assignment, heap: Heap, direct: DirectPermi
     })
   }
 
+  def fold(defs: Map[String, PredDef], pred: PredInst, perm: Term): KnowledgeBase = {
+    update(a => h => d => f => i => {
+      val predDef = defs(pred.name)
+
+      val instantiated = predDef.instantiate(pred)
+      val direct = PredicateCollector.collectDirectPredicates(instantiated, this)
+      val folded = PredicateCollector.collectFoldedPredicates(instantiated, this)
+      val pure = PredicateCollector.stripToPure(instantiated, this)
+
+      val ud = direct
+        .map(d => PredFieldAccTerm(d.exp, MulTerm(d.perm, perm)))
+        .foldLeft(d)((a, b) => a.exhale(b))
+      val uf = folded
+        .map(d => PredInstAccTerm(d.pred, MulTerm(d.perm, perm)))
+        .foldLeft(f.inhale(PredInstAccTerm(pred, perm)))((a, b) => a.exhale(b))
+      val ui = i.and(pure)
+
+      (a, h, ud, uf, ui)
+    })
+  }
+
+
   def substituteRef(ref: ValRef, fresh: ValRef): KnowledgeBase = {
     KnowledgeBase(
       this.assignment,
@@ -658,6 +689,48 @@ case class KnowledgeBase(assignment: Assignment, heap: Heap, direct: DirectPermi
       this.folded,
       this.info
     )
+  }
+
+  private def mergeRefoldingStrategyOptions(strats: Seq[Option[RefoldingStrategy]]): Option[RefoldingStrategy] = {
+    strats.foldLeft(Some(Seq[RefoldingStep]()).asInstanceOf[Option[Seq[RefoldingStep]]])(
+        (acc, strat) => (acc, strat) match {
+          case (Some(a), Some(s)) => Some(a ++ s.steps)
+          case _ => None
+        })
+      .map(v => RefoldingStrategy(v))
+  }
+
+  private def attemptRefolding(defs: Map[String, PredDef], f: PredInstAccTerm): Option[RefoldingStrategy] = {
+    val predDef = defs(f.pred.name)
+
+    val instantiated = predDef.instantiate(f.pred)
+    val direct = PredicateCollector.collectDirectPredicates(instantiated, this)
+    val folded = PredicateCollector.collectFoldedPredicates(instantiated, this)
+    val pure = PredicateCollector.stripToPure(instantiated, this)
+
+    val mappedDirect = direct.map(d => findUnfoldingStrategy(defs, d))
+    val mappedFolded = folded.map(f => findRefoldingStrategy(defs, f))
+
+    mergeRefoldingStrategyOptions(mappedDirect ++ mappedFolded)
+      .map(r => RefoldingStrategy(r.steps ++ Seq(FoldingStep(f.pred, f.perm))))
+  }
+
+  def findRefoldingStrategy(defs: Map[String, PredDef], f: PredInstAccTerm): Option[RefoldingStrategy] = {
+    val current = this.folded.getAmount(f.pred)
+    if (hasEnoughPermissions(f.perm, current)) {
+      Some(RefoldingStrategy(Seq()))
+    } else {
+      // check if the predicate can be unfolded
+      val unfolding = findUnfoldingStrategy(defs, f)
+      // check if the predicate can be folded (potentially by unfolding some other predicate)
+      val refolding = attemptRefolding(defs, f)
+      (unfolding, refolding) match {
+        case (Some(a), Some(b)) => Some(RefoldingStrategy(a.steps ++ b.steps))
+        case (Some(a), None) => Some(a)
+        case (None, Some(a)) => Some(a)
+        case (None, None) => None
+      }
+    }
   }
 }
 
@@ -826,9 +899,9 @@ object PredicateCollector {
   }
 }
 
-
-case class Inference(defs: Map[String, PredDef], reps: Map[String, InternalMethod], program: Program) {
-
+case class MethodInference(defs: Map[String, PredDef], reps: Map[String, InternalMethod], program: Program,
+                           methSpec: mutable.HashMap[String, (Seq[LogicTerm], Seq[LogicTerm])],
+                           injections: mutable.HashMap[Injection, Seq[RefoldingStrategy]]) {
   def merge(incoming: Seq[KnowledgeBase]): KnowledgeBase = {
     // TODO: maybe add a dedicated merge line which is takes care of this and makes merging more reliable
 
@@ -884,9 +957,11 @@ case class Inference(defs: Map[String, PredDef], reps: Map[String, InternalMetho
   private def applyRefoldingStep(base: KnowledgeBase, step: RefoldingStep): KnowledgeBase = {
     step match {
       case FoldingStep(pred, perm) => {
-        // fold subs first
+        // if in the future the folding step has sub steps to fold other stuff beforehand then
+        // insert the folding here before folding self
+
         // fold self
-        throw new RuntimeException("Not implemented! (folding step processing)")
+        base.fold(this.defs, pred, perm)
       }
       case UnfoldingStep(pred, perm, subs) => {
         // unfold the predicate on the current level
@@ -900,12 +975,13 @@ case class Inference(defs: Map[String, PredDef], reps: Map[String, InternalMetho
     }
   }
 
-  private def applyRefoldingStrategy(before: KnowledgeBase, strat: RefoldingStrategy): KnowledgeBase = {
+  private def applyRefoldingStrategy(inj: Injection, before: KnowledgeBase, strat: RefoldingStrategy): KnowledgeBase = {
+    addRefoldingStrategiesToInjectionPoint(inj, Seq(strat))
     strat.steps.foldLeft(before)(applyRefoldingStep)
   }
 
-  private def applyStrategies(before: KnowledgeBase, strats: Seq[RefoldingStrategy]): KnowledgeBase = {
-    strats.foldLeft(before)(applyRefoldingStrategy)
+  private def applyStrategies(inj: Injection, before: KnowledgeBase, strats: Seq[RefoldingStrategy]): KnowledgeBase = {
+    strats.foldLeft(before)((kb, s) => applyRefoldingStrategy(inj, kb, s))
   }
 
   // TODO: maybe simplify the value ref computation and return option val ref to signal that a primitive type is returned
@@ -1075,19 +1151,93 @@ case class Inference(defs: Map[String, PredDef], reps: Map[String, InternalMetho
     }
   }
 
+  private def propagateBackFieldPermReq(pred: PredFieldAccTerm, actual: Term): Unit = {
+    println(s"PROPAGATING BACK: ${pred.pretty()} has only ${actual.pretty()}")
+  }
+
+  private def getRefoldingStrategiesAtInjectionPoint(inj: Injection): Seq[RefoldingStrategy] = {
+    this.injections.getOrElse(inj, Seq())
+  }
+
+  private def clearInjection(inj: Injection): Unit = {
+    this.injections.put(inj, Seq())
+  }
+
+  private def addRefoldingStrategiesToInjectionPoint(inj: Injection, strat: Seq[RefoldingStrategy]): Unit = {
+    val ext = getRefoldingStrategiesAtInjectionPoint(inj) ++ strat
+    this.injections.put(inj, ext)
+  }
+
   def processLine(before: KnowledgeBase, line: Line): KnowledgeBase = {
     line match {
-      //      case AssertLine(ln, inj, exp) =>
-      //      case AssumeLine(ln, exp) =>
-      //      case BranchLine(ln, pre, cond, thn, els) =>
-      //      case CallLine(ln, inj, method, targets, args) =>
+      case AssertLine(ln, inj, exp) => {
+        clearInjection(inj)
+
+        val folded = PredicateCollector.collectFoldedPredicates(exp, before)
+        val direct = PredicateCollector.collectDirectPredicates(exp, before)
+        val stripped = PredicateCollector.stripToPure(exp, before)
+
+        val afterUnfolding = direct.foldLeft(before)((kb, d) => {
+          kb.findUnfoldingStrategy(this.defs, d)
+            .map(s => applyRefoldingStrategy(inj, kb, s))
+            .getOrElse(kb)
+        })
+
+        val afterRefolding = folded.foldLeft(afterUnfolding)((kb, f) => {
+          kb.findRefoldingStrategy(this.defs, f)
+            .map(s => applyRefoldingStrategy(inj, kb, s))
+            .getOrElse(kb)
+        })
+
+        afterRefolding
+      }
+        //      case AssumeLine(ln, exp) =>
+        //      case BranchLine(ln, pre, cond, thn, els) =>
+      case CallLine(ln, inj, method, targets, args) => {
+        val initial = this.reps(method)
+        val spec = this.methSpec(method)
+
+        // exhale the pres in reverse order
+        val extendedPres = initial.pres ++ spec._1
+        val afterExhales = extendedPres.reverse.foldLeft(before)((kb, p) => {
+          val strats = getRefoldingStrategiesAtInjectionPoint(inj)
+          val result = processLine(kb, ExhaleLine(ln, inj, p))
+          val after = getRefoldingStrategiesAtInjectionPoint(inj)
+          clearInjection(inj)
+          addRefoldingStrategiesToInjectionPoint(inj, strats ++ after)
+          result
+        })
+
+        // inhale the posts in correct order
+        val extendedPosts = initial.posts ++ spec._2
+        val afterInhales = extendedPosts.foldLeft(afterExhales)((kb, p) => processLine(kb, InhaleLine(ln, p)))
+
+        afterInhales
+      }
       case ExhaleLine(ln, inj, exp) => {
+        clearInjection(inj)
+
         // TODO: check that all requirements are satisfied i.e. that all the field/pred permissions are provided
         //       -> generate and apply refolding strategies
         val folded = PredicateCollector.collectFoldedPredicates(exp, before)
         val direct = PredicateCollector.collectDirectPredicates(exp, before)
         val stripped = PredicateCollector.stripToPure(exp, before)
-        before.update(a => h => d => f => fac => {
+
+        val afterUnfolding = direct.foldLeft(before)((kb, d) => {
+          kb.findUnfoldingStrategy(this.defs, d)
+            .map(s => applyRefoldingStrategy(inj, kb, s))
+            .getOrElse(kb)
+        })
+
+        val afterRefolding = folded.foldLeft(afterUnfolding)((kb, f) => {
+          kb.findRefoldingStrategy(this.defs, f)
+            .map(s => applyRefoldingStrategy(inj, kb, s))
+            .getOrElse(kb)
+        })
+
+        // TODO: detect that the predicate permissions are not fulfilled
+
+        afterRefolding.update(a => h => d => f => fac => {
           val ud = direct.foldLeft(d)((a, b) => a.exhale(b))
           val uf = folded.foldLeft(f)((a, b) => a.exhale(b))
           val ufac = fac.and(stripped)
@@ -1095,27 +1245,36 @@ case class Inference(defs: Map[String, PredDef], reps: Map[String, InternalMetho
         })
       }
       case LocalAssignLine(ln, inj, variable, value) => {
+        clearInjection(inj)
+
         // TODO: check that all requirements are satisfied i.e. that all the field/pred permissions are provided
         //       -> generate and apply refolding strategies
         val reqsValue = collectRequiredFieldPermissions(value)
         val stratsValue = reqsValue.map(v => (v, before.findUnfoldingStrategy(this.defs, v)))
           .flatMap(v => v._2).toSeq
-        val kb = applyStrategies(before, stratsValue)
+        val kb = applyStrategies(inj, before, stratsValue)
+
+        reqsValue.map(p => (p, kb.direct.getAmount(p.exp)))
+          .filter(p => !kb.hasEnoughPermissions(p._1.perm, p._2))
+          .foreach(p => propagateBackFieldPermReq(p._1, p._2))
 
         val (a2, refBeforeAssign) = before.assignment.lookup(variable.name)
         val (a3, h3, valRef) = computeValueRef(a2, before.heap, value)
         val ua = a3.assign(variable.name, valRef)
 
         val ts = MapTermSub(Map((variable, VarTerm(s"t$$${refBeforeAssign.id}", variable.typ))))
+        val subbedInfo = kb.info.substitute(ts).and(DNF(Set(Set(EqCmpTerm(variable, value)))))
         KnowledgeBase(
           ua,
           h3,
           kb.direct.substitute(ts),
           kb.folded.substitute(ts),
-          kb.info.substitute(ts)
+          subbedInfo
         )
       }
       case FieldAssignLine(ln, inj, fa, value) => {
+        clearInjection(inj)
+
         // TODO: ensure that all requirements are satisfied/permissions are available(provable)
         // TODO: if needed add unfolding statements for the permissions
         // TODO: perform the substitution
@@ -1138,7 +1297,7 @@ case class Inference(defs: Map[String, PredDef], reps: Map[String, InternalMetho
         // this can be refined with better implementations at some point in time :)
         val combinedStrats = (stratsTarget ++ stratsValue).flatMap(v => v._2).toSeq
 
-        val kb = applyStrategies(before, combinedStrats)
+        val kb = applyStrategies(inj, before, combinedStrats)
 
         val (a1, h1, valueRef) = computeValueRef(kb.assignment, kb.heap, value)
 
@@ -1175,14 +1334,24 @@ case class Inference(defs: Map[String, PredDef], reps: Map[String, InternalMetho
   }
 
   def infer(meth: InternalMethod) = {
-    // TODO: add multiplication processing to the term rewriter
     val knowledge = mutable.HashMap[Ident, KnowledgeBase]()
     val counter = RefCounter(Counter(0))
+
+    // generate an initial assignment based of the arguments of the method
     val initAssignment = meth.args.foldLeft(new Assignment(counter))((a, f) => a.assign(f._1, counter.freshValRef()))
     knowledge.put(meth.start, KnowledgeBase(initAssignment, new Heap(counter), new DirectPermissionMask(), new FoldedPermissionMask(), DNF(Set(Set()))))
 
+    // TODO: inhale the pre conditions
+
+    // TODO: maybe abstract the inference process into its own case class to expose the internal method without passing it through everything
+    //       also allow easier collection of the additional specification
+
+    // initialize empty additional specs for all methods
+    this.reps.keySet.foreach(k => this.methSpec.put(k, (Seq(), Seq())))
+
     val mesh = meth.rep.mesh
     val lines = meth.rep.lines
+
     var open = mesh(meth.start).toSeq
     while (open.nonEmpty) {
       val current = open.head
@@ -1202,7 +1371,13 @@ case class Inference(defs: Map[String, PredDef], reps: Map[String, InternalMetho
 
       open = open.tail ++ mesh(current).toSeq
     }
+
+    // TODO: exhale post conditions
   }
+}
+
+
+case class Inference(defs: Map[String, PredDef], reps: Map[String, InternalMethod], program: Program, methSpec: mutable.HashMap[String, (Seq[LogicTerm], Seq[LogicTerm])]) {
 
   def infer(): Unit = {
     // TODO: maybe extend inference fields with outline information etc
@@ -1221,7 +1396,24 @@ case class Inference(defs: Map[String, PredDef], reps: Map[String, InternalMetho
     val order = DependencyAnalysis.computeFlatTopologicalOrder(reps)
     order.foreach(f => {
       println(s"::::::::::: inferring ${f}")
-      infer(this.reps(f))
+      val mi = MethodInference(
+        this.defs,
+        this.reps,
+        this.program,
+        this.methSpec,
+        new mutable.HashMap()
+      )
+      mi.infer(this.reps(f))
+      println("::::::::::::::::::::: STORIES AT INJECTION :::::::::::::::::")
+      mi.injections.toSeq
+        .sortBy(e => e._1.id)
+        .foreach(e => {
+          println(s"injection ${e._1.id}")
+          e._2.foreach(v => {
+            println(v.pretty())
+            println("---")
+          })
+        })
     })
   }
 }
