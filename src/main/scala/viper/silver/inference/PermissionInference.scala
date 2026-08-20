@@ -9,6 +9,7 @@ import viper.silver.inference.v3.InferV3
 object PermissionInference {
   def process(program: Program): Option[Program] = {
     try{
+//      Infer(program).process()
       InferV3(program).process()
     }
     catch {

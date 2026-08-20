@@ -60,13 +60,19 @@ case class BranchLine(ln: Ident, pre: Injection, cond: LogicTerm, thn: Ident, el
   }
 }
 
+case class MergeLine(ln: Ident, postThnInj: Injection, postElsInj: Injection, lastThn: Ident, lastEls: Ident) extends Line {
+  def pretty(): String = {
+    s"${this.ln.pretty()} merge [${this.postThnInj.id} | ${this.postElsInj.id}]  [${this.lastThn.pretty()} | ${this.lastEls.pretty()}]"
+  }
+}
+
 case class CallLine(ln: Ident, inj: Injection, method: String, targets: Seq[VarTerm], args: Seq[Term]) extends Line {
   def pretty(): String = {
     s"${this.ln.pretty()} [${this.inj.id}] call ${this.method} (${this.args.map(a => a.pretty()).mkString(", ")})"
   }
 }
 
-case class InternalMethod(method: String, args: Seq[(String, Type)], pres: Seq[LogicTerm], posts: Seq[LogicTerm], start: Ident, stop: Set[Ident], rep: InternalRepresentation) {
+case class InternalMethod(method: String, args: Seq[(String, Type)], pres: Seq[LogicTerm], posts: Seq[LogicTerm], start: Ident, stop: Ident, rep: InternalRepresentation) {
 
 }
 
@@ -75,9 +81,9 @@ case class InternalRepresentation(counter: Counter, lines: mutable.HashMap[Ident
     this(Counter(0), new mutable.HashMap(), new mutable.HashMap())
   }
 
-  def introduce(prev: Set[Ident], line: Line): Unit = {
+  def introduce(prev: Ident, line: Line): Unit = {
     addLine(line)
-    addConnections(prev, line.ln)
+    addConnection(prev, line.ln)
   }
 
   def addLine(line: Line): Unit = {
@@ -85,10 +91,6 @@ case class InternalRepresentation(counter: Counter, lines: mutable.HashMap[Ident
     if (!this.mesh.contains(line.ln)) {
       this.mesh.put(line.ln, new mutable.HashSet())
     }
-  }
-
-  def addConnections(from: Set[Ident], to: Ident): Unit = {
-    from.foreach(f => addConnection(f, to))
   }
 
   def addConnection(from: Ident, to: Ident): Unit = {

@@ -522,10 +522,22 @@ case class DNF(clauses: Set[Set[Comparison]]) {
   }
 }
 
+trait ProofResult { }
+// represents that the current knowledge proves the statement
+object Sat extends ProofResult { }
+// represents that the current knowledge conflicts with the statement
+object UnSat extends ProofResult { }
+// represents a potential satisfaction given the current knowledge
+object PotSat extends ProofResult { }
+
 case class KnowledgeBase(assignment: Assignment, heap: Heap, direct: DirectPermissionMask, folded: FoldedPermissionMask, info: DNF) {
 
   def prove(term: LogicTerm): Boolean = {
     false
+  }
+
+  def proveDetailed(term: LogicTerm): ProofResult = {
+    UnSat
   }
 
   def update(f: Assignment => Heap => DirectPermissionMask => FoldedPermissionMask => DNF => (Assignment, Heap, DirectPermissionMask, FoldedPermissionMask, DNF)): KnowledgeBase = {
@@ -899,7 +911,7 @@ object PredicateCollector {
   }
 }
 
-case class MethodInference(defs: Map[String, PredDef], reps: Map[String, InternalMethod], program: Program,
+case class MethodInference(defs: Map[String, PredDef], reps: Map[String, InternalMethod], currentMethod: InternalMethod,
                            methSpec: mutable.HashMap[String, (Seq[LogicTerm], Seq[LogicTerm])],
                            injections: mutable.HashMap[Injection, Seq[RefoldingStrategy]]) {
   def merge(incoming: Seq[KnowledgeBase]): KnowledgeBase = {
@@ -1151,8 +1163,14 @@ case class MethodInference(defs: Map[String, PredDef], reps: Map[String, Interna
     }
   }
 
-  private def propagateBackFieldPermReq(pred: PredFieldAccTerm, actual: Term): Unit = {
-    println(s"PROPAGATING BACK: ${pred.pretty()} has only ${actual.pretty()}")
+  private def propagateBackFieldPermReq(from: Ident, pred: PredFieldAccTerm, actual: Term): Unit = {
+    // TODO: fix the shortcut and actually propagate the requirements backward
+    println(s"PROPAGATING BACK: ${pred.pretty()} has only ${actual.pretty()} from ${from}")
+    val currentSpec = this.methSpec(this.currentMethod.method)
+    val currentPre = currentSpec._1
+    val currentPost = currentSpec._2
+    val remainingRequired = TermRewriter.simplify(SubTerm(pred.perm, actual))
+    this.methSpec.put(this.currentMethod.method, (currentPre ++ Seq(PredFieldAccTerm(pred.exp, remainingRequired)), currentPost))
   }
 
   private def getRefoldingStrategiesAtInjectionPoint(inj: Injection): Seq[RefoldingStrategy] = {
@@ -1191,7 +1209,12 @@ case class MethodInference(defs: Map[String, PredDef], reps: Map[String, Interna
 
         afterRefolding
       }
-        //      case AssumeLine(ln, exp) =>
+      case AssumeLine(ln, exp) => {
+        val stripped = PredicateCollector.stripToPure(exp, before)
+        before.update(a => h => d => f => i => {
+          (a, h, d, f, i.and(stripped))
+        })
+      }
         //      case BranchLine(ln, pre, cond, thn, els) =>
       case CallLine(ln, inj, method, targets, args) => {
         val initial = this.reps(method)
@@ -1256,7 +1279,7 @@ case class MethodInference(defs: Map[String, PredDef], reps: Map[String, Interna
 
         reqsValue.map(p => (p, kb.direct.getAmount(p.exp)))
           .filter(p => !kb.hasEnoughPermissions(p._1.perm, p._2))
-          .foreach(p => propagateBackFieldPermReq(p._1, p._2))
+          .foreach(p => propagateBackFieldPermReq(ln, p._1, p._2))
 
         val (a2, refBeforeAssign) = before.assignment.lookup(variable.name)
         val (a3, h3, valRef) = computeValueRef(a2, before.heap, value)
@@ -1298,6 +1321,14 @@ case class MethodInference(defs: Map[String, PredDef], reps: Map[String, Interna
         val combinedStrats = (stratsTarget ++ stratsValue).flatMap(v => v._2).toSeq
 
         val kb = applyStrategies(inj, before, combinedStrats)
+
+        reqsValue.map(p => (p, kb.direct.getAmount(p.exp)))
+          .filter(p => !kb.hasEnoughPermissions(p._1.perm, p._2))
+          .foreach(p => propagateBackFieldPermReq(ln, p._1, p._2))
+
+        combined.map(p => (p, kb.direct.getAmount(p.exp)))
+          .filter(p => !kb.hasEnoughPermissions(p._1.perm, p._2))
+          .foreach(p => propagateBackFieldPermReq(ln, p._1, p._2))
 
         val (a1, h1, valueRef) = computeValueRef(kb.assignment, kb.heap, value)
 
@@ -1379,7 +1410,17 @@ case class MethodInference(defs: Map[String, PredDef], reps: Map[String, Interna
 
 case class Inference(defs: Map[String, PredDef], reps: Map[String, InternalMethod], program: Program, methSpec: mutable.HashMap[String, (Seq[LogicTerm], Seq[LogicTerm])]) {
 
+  def printSpec(spec: (Seq[LogicTerm], Seq[LogicTerm])): Unit = {
+    println("pres:")
+    spec._1.foreach(e => println(e.pretty().indent(2)))
+    println("posts:")
+    spec._2.foreach(e => println(e.pretty().indent(2)))
+  }
+
   def infer(): Unit = {
+
+
+    this.reps.keySet.foreach(k => this.methSpec.put(k, (Seq(), Seq())))
     // TODO: maybe extend inference fields with outline information etc
 
     // TODO: example identity function
@@ -1399,11 +1440,17 @@ case class Inference(defs: Map[String, PredDef], reps: Map[String, InternalMetho
       val mi = MethodInference(
         this.defs,
         this.reps,
-        this.program,
+        this.reps(f),
         this.methSpec,
         new mutable.HashMap()
       )
+      val beforeSpec = this.methSpec(f)
       mi.infer(this.reps(f))
+      println("::::::::::::::::::::: ADD. SPEC. BEFORE INFERENCE :::::::::::::::::")
+      printSpec(beforeSpec)
+      println("::::::::::::::::::::: ADD. SPEC. AFTER INFERENCE :::::::::::::::::")
+      val afterSpec = this.methSpec(f)
+      printSpec(afterSpec)
       println("::::::::::::::::::::: STORIES AT INJECTION :::::::::::::::::")
       mi.injections.toSeq
         .sortBy(e => e._1.id)
