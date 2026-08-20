@@ -1358,6 +1358,30 @@ case class MethodInference(defs: Map[String, PredDef], reps: Map[String, Interna
           (a, h, ud, uf, ufac)
         })
       }
+      case NewObjLine(ln, target, fields) => {
+        // perform the assignment
+        val (a2, refBeforeAssign) = before.assignment.lookup(target.name)
+        val valRef = a2.rc.freshValRef()
+        val ua = a2.assign(target.name, valRef)
+
+        val afterAssign = KnowledgeBase(
+          ua, before.heap, before.direct, before.folded, before.info
+        )
+
+        // substitute the old variable and inhale the new permissions
+        val ts = MapTermSub(Map((target, VarTerm(s"t$$${refBeforeAssign.id}", target.typ))))
+        afterAssign.update(
+          a => h => d => f => i => {
+            val dir = fields.foldLeft(d.substitute(ts))((m, f) => {
+              val fa = FieldAccTerm(target, f._1, f._2)
+              m.inhale(PredFieldAccTerm(fa, PermAmount.WRITE))
+            })
+            val fol = f.substitute(ts)
+            val info = i.substitute(ts)
+            (a, h, dir, fol, info)
+          }
+        )
+      }
       case l => {
         throw new IllegalArgumentException(s"Unable to process line type ${l.getClass.getCanonicalName}")
       }
@@ -1370,12 +1394,10 @@ case class MethodInference(defs: Map[String, PredDef], reps: Map[String, Interna
 
     // generate an initial assignment based of the arguments of the method
     val initAssignment = meth.args.foldLeft(new Assignment(counter))((a, f) => a.assign(f._1, counter.freshValRef()))
-    knowledge.put(meth.start, KnowledgeBase(initAssignment, new Heap(counter), new DirectPermissionMask(), new FoldedPermissionMask(), DNF(Set(Set()))))
-
-    // TODO: inhale the pre conditions
-
-    // TODO: maybe abstract the inference process into its own case class to expose the internal method without passing it through everything
-    //       also allow easier collection of the additional specification
+    val empty = KnowledgeBase(initAssignment, new Heap(counter), new DirectPermissionMask(), new FoldedPermissionMask(), DNF(Set(Set())))
+    // inhale the preconditions
+    val afterPres = meth.pres.foldLeft(empty)((kb, p) => processLine(kb, InhaleLine(meth.start, p)))
+    knowledge.put(meth.start, afterPres)
 
     // initialize empty additional specs for all methods
     this.reps.keySet.foreach(k => this.methSpec.put(k, (Seq(), Seq())))
