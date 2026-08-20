@@ -72,6 +72,12 @@ case class CallLine(ln: Ident, inj: Injection, method: String, targets: Seq[VarT
   }
 }
 
+case class NewObjLine(ln: Ident, target: VarTerm, fields: Seq[String]) extends Line {
+  def pretty(): String = {
+    s"${this.ln.pretty()} ${this.target.pretty()} := new(${this.fields.mkString(", ")})"
+  }
+}
+
 case class InternalMethod(method: String, args: Seq[(String, Type)], pres: Seq[LogicTerm], posts: Seq[LogicTerm], start: Ident, stop: Ident, rep: InternalRepresentation) {
 
 }

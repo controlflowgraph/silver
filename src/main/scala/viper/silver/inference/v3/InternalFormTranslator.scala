@@ -93,13 +93,10 @@ object InternalFormTranslator {
 
         // inhaling access to the new location
         val mappedVar = VarTerm(lhs.name, lhs.typ)
-        val mapped = fields.map(f => FieldAccTerm(mappedVar, f.name, f.typ))
-          .map(f => PredFieldAccTerm(f, PermAmount.WRITE))
-          .reduceOption[LogicTerm]((a, b) => AndTerm(a, b))
-          .getOrElse(BoolTerm(true))
+        val fieldNames = fields.map(f => f.name)
 
         val ln = rep.freshIdent()
-        val line = InhaleLine(ln, mapped)
+        val line = NewObjLine(ln, mappedVar, fieldNames)
 
         rep.addLine(line)
         rep.addConnection(prev, ln)
