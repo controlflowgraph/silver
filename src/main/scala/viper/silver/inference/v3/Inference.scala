@@ -530,19 +530,123 @@ object UnSat extends ProofResult { }
 // represents a potential satisfaction given the current knowledge
 object PotSat extends ProofResult { }
 
-case class KnowledgeBase(assignment: Assignment, heap: Heap, direct: DirectPermissionMask, folded: FoldedPermissionMask, info: DNF) {
+case class Potential(partial: Set[ImplTerm]) {
+
+  def this() = {
+    this(Set())
+  }
+
+  def substitute(ts: TermSub): Potential = {
+    Potential(this.partial.map(i => ImplTerm(
+      i.prem.substitute(ts).asInstanceOf[LogicTerm],
+      i.cons.substitute(ts).asInstanceOf[LogicTerm]
+    )))
+  }
+
+  def pretty(): String = {
+    this.partial.map(i => i.pretty()).toSeq.mkString("\n")
+  }
+
+  def inhale(partial: Seq[ImplTerm]): Potential = {
+    Potential(this.partial.union(partial.toSet))
+  }
+}
+
+case class KnowledgeBase(assignment: Assignment, heap: Heap, direct: DirectPermissionMask, folded: FoldedPermissionMask, info: DNF, partial: Potential) {
 
   def prove(term: LogicTerm): Boolean = {
-    false
+    proveDetailed(term) == Sat
+  }
+
+  private def resultOfBool(value: Boolean): ProofResult = {
+    if(value) Sat
+    else UnSat
+  }
+
+  def proveClause(cls: Set[Comparison], term: LogicTerm): ProofResult = {
+    term match {
+      case AndTerm(a, b) => {
+        val resA = proveClause(cls, a)
+        val resB = proveClause(cls, b)
+        mergeProofResultsConj(resA, resB)
+      }
+      case BoolTerm(value) => resultOfBool(value)
+      case c: Comparison => {
+        val isSat = cls.contains(c)
+        val isUn = cls.contains(c.negate())
+        if(isSat) Sat
+        else if(isUn) UnSat
+        else PotSat
+      }
+      case ImplTerm(prem, cons) => proveClause(cls, OrTerm(NotTerm(prem), cons))
+      case NotTerm(t) => {
+        val resT = proveClause(cls, t)
+        resT match {
+          case PotSat => PotSat
+          case Sat => UnSat
+          case UnSat => Sat
+          case _ => {
+            throw new IllegalArgumentException(s"Unable to negate proof result ${resT}")
+          }
+        }
+      }
+      case OrTerm(a, b) => {
+        val resA = proveClause(cls, a)
+        val resB = proveClause(cls, b)
+        mergeProofResultsDis(resA, resB)
+      }
+      case _ => {
+        throw new IllegalArgumentException(s"Unable to process term of type ${term.getClass.getCanonicalName} while proving")
+      }
+    }
+  }
+
+  private def mergeProofResultsDis(a: ProofResult, b: ProofResult): ProofResult = {
+    (a, b) match {
+      case (Sat, Sat) => Sat
+      case (Sat, UnSat) => Sat
+      case (UnSat, Sat) => Sat
+      case (UnSat, UnSat) => UnSat
+      case (Sat, PotSat) => Sat
+      case (PotSat, Sat) => Sat
+      case (PotSat, UnSat) => PotSat
+      case (UnSat, PotSat) => PotSat
+      case _ => {
+        throw new IllegalArgumentException(s"Unknown combination of proof results ${a} & ${b}")
+      }
+    }
+  }
+  private def mergeProofResultsConj(a: ProofResult, b: ProofResult): ProofResult = {
+    (a, b) match {
+      case (Sat, Sat) => Sat
+      case (Sat, UnSat) => UnSat
+      case (UnSat, Sat) => UnSat
+      case (UnSat, UnSat) => UnSat
+      case (Sat, PotSat) => PotSat
+      case (PotSat, Sat) => PotSat
+      case (PotSat, UnSat) => UnSat
+      case (UnSat, PotSat) => UnSat
+      case _ => {
+        throw new IllegalArgumentException(s"Unknown combination of proof results ${a} & ${b}")
+      }
+    }
   }
 
   def proveDetailed(term: LogicTerm): ProofResult = {
-    UnSat
+    this.info.clauses.map(c => proveClause(c, term))
+      .foldLeft(Sat.asInstanceOf[ProofResult])(mergeProofResultsConj)
   }
 
-  def update(f: Assignment => Heap => DirectPermissionMask => FoldedPermissionMask => DNF => (Assignment, Heap, DirectPermissionMask, FoldedPermissionMask, DNF)): KnowledgeBase = {
-    val res = f(this.assignment)(this.heap)(this.direct)(this.folded)(this.info)
-    KnowledgeBase(res._1, res._2, res._3, res._4, res._5)
+  def update(fun: Assignment => Heap => DirectPermissionMask => FoldedPermissionMask => DNF => (Assignment, Heap, DirectPermissionMask, FoldedPermissionMask, DNF)): KnowledgeBase = {
+    update((a, h, d, f, i, p) => {
+      val res = fun(a)(h)(d)(f)(i)
+      (res._1, res._2, res._3, res._4, res._5, p)
+    })
+  }
+
+  def update(f: (Assignment, Heap, DirectPermissionMask, FoldedPermissionMask, DNF, Potential) => (Assignment, Heap, DirectPermissionMask, FoldedPermissionMask, DNF, Potential)): KnowledgeBase = {
+    val res = f(this.assignment, this.heap, this.direct, this.folded, this.info, this.partial)
+    KnowledgeBase(res._1, res._2, res._3, res._4, res._5, res._6)
   }
 
   def pretty(): String = {
@@ -551,7 +655,8 @@ case class KnowledgeBase(assignment: Assignment, heap: Heap, direct: DirectPermi
     val prettyDirect = this.direct.pretty().indent(2)
     val prettyFolded = this.folded.pretty().indent(2)
     val prettyDNF = this.info.pretty().indent(2)
-    s"assignment:\n$prettyAssignment\nheap:\n$prettyHeap\ndirect:\n$prettyDirect\nfolded:\n$prettyFolded\nfacts:\n$prettyDNF"
+    val prettyPot = this.partial.pretty().indent(2)
+    s"assignment:\n$prettyAssignment\nheap:\n$prettyHeap\ndirect:\n$prettyDirect\nfolded:\n$prettyFolded\nfacts:\n$prettyDNF\npotential:\n${prettyPot}"
   }
 
   def hasEnoughPermissions(amount: Term, higher: Term): Boolean = {
@@ -699,7 +804,8 @@ case class KnowledgeBase(assignment: Assignment, heap: Heap, direct: DirectPermi
       this.heap,
       this.direct,
       this.folded,
-      this.info
+      this.info,
+      this.partial
     )
   }
 
@@ -779,6 +885,49 @@ case class RefoldingStrategy(steps: Seq[RefoldingStep]) {
 }
 
 object PredicateCollector {
+  def collectPotSatImpls(term: LogicTerm, kb: KnowledgeBase): Seq[ImplTerm] = {
+    term match {
+      case _: BoolTerm => Seq()
+      case _: EqCmpTerm => Seq()
+      case _: GreaterCmpTerm => Seq()
+      case _: GreaterEqCmpTerm => Seq()
+      case _: LessCmpTerm => Seq()
+      case _: LessEqCmpTerm => Seq()
+      case _: NotEqCmpTerm => Seq()
+      case AndTerm(a, b) => collectPotSatImpls(a, kb) ++ collectPotSatImpls(b, kb)
+      case impl@ImplTerm(prem, cons) => {
+        if (kb.proveDetailed(prem) == PotSat) Seq(impl)
+        else Seq()
+      }
+      case NotTerm(t) => {
+        val included = collectPotSatImpls(t, kb)
+        if (included.nonEmpty) {
+          throw new IllegalArgumentException("Field access predicates within negation!")
+        }
+        Seq()
+      }
+      case OrTerm(a, b) => {
+        // based on the assumption that viper does not support disjunctions with resource access stuff
+        val includedA = collectPotSatImpls(a, kb)
+        if (includedA.nonEmpty) {
+          throw new IllegalArgumentException("Field access predicates within disjunction!")
+        }
+        val includedB = collectPotSatImpls(b, kb)
+        if (includedB.nonEmpty) {
+          throw new IllegalArgumentException("Field access predicates within disjunction!")
+        }
+        Seq()
+      }
+      case _: PredFieldAccTerm => Seq()
+      case _: PredInstAccTerm => Seq()
+      case _: VarTerm => Seq()
+      case _ => {
+        throw new IllegalArgumentException(s"Unable to extract folded predicates from logic term ${term.getClass.getCanonicalName}")
+      }
+    }
+  }
+
+
   def collectDirectPredicates(term: LogicTerm, kb: KnowledgeBase): Seq[PredFieldAccTerm] = {
     term match {
       case _: BoolTerm => Seq()
@@ -1292,7 +1441,8 @@ case class MethodInference(defs: Map[String, PredDef], reps: Map[String, Interna
           h3,
           kb.direct.substitute(ts),
           kb.folded.substitute(ts),
-          subbedInfo
+          subbedInfo,
+          kb.partial.substitute(ts)
         )
       }
       case FieldAssignLine(ln, inj, fa, value) => {
@@ -1322,12 +1472,19 @@ case class MethodInference(defs: Map[String, PredDef], reps: Map[String, Interna
 
         val kb = applyStrategies(inj, before, combinedStrats)
 
-        reqsValue.map(p => (p, kb.direct.getAmount(p.exp)))
+        val stillMissingValue = reqsValue.map(p => (p, kb.direct.getAmount(p.exp)))
           .filter(p => !kb.hasEnoughPermissions(p._1.perm, p._2))
-          .foreach(p => propagateBackFieldPermReq(ln, p._1, p._2))
 
-        combined.map(p => (p, kb.direct.getAmount(p.exp)))
+        stillMissingValue.foreach(a => findIfPotHasSolution(kb, a._1, a._2))
+
+        stillMissingValue.foreach(p => propagateBackFieldPermReq(ln, p._1, p._2))
+
+        val stillMissingTarget = combined.map(p => (p, kb.direct.getAmount(p.exp)))
           .filter(p => !kb.hasEnoughPermissions(p._1.perm, p._2))
+
+        stillMissingTarget.foreach(a => findIfPotHasSolution(kb, a._1, a._2))
+
+        stillMissingTarget
           .foreach(p => propagateBackFieldPermReq(ln, p._1, p._2))
 
         val (a1, h1, valueRef) = computeValueRef(kb.assignment, kb.heap, value)
@@ -1344,18 +1501,22 @@ case class MethodInference(defs: Map[String, PredDef], reps: Map[String, Interna
           h5,
           kb.direct.substitute(ts),
           kb.folded.substitute(ts),
-          kb.info.substitute(ts)
+          kb.info.substitute(ts),
+          kb.partial.substitute(ts)
         )
       }
       case InhaleLine(ln, exp) => {
         val folded = PredicateCollector.collectFoldedPredicates(exp, before)
         val direct = PredicateCollector.collectDirectPredicates(exp, before)
         val stripped = PredicateCollector.stripToPure(exp, before)
-        before.update(a => h => d => f => fac => {
+        val partial = PredicateCollector.collectPotSatImpls(exp, before)
+        println(s"INHALING PARTIAL: ${partial}")
+        before.update((a, h, d, f, fac, pot) => {
           val ud = direct.foldLeft(d)((a, b) => a.inhale(b))
           val uf = folded.foldLeft(f)((a, b) => a.inhale(b))
           val ufac = fac.and(stripped)
-          (a, h, ud, uf, ufac)
+          val up = pot.inhale(partial)
+          (a, h, ud, uf, ufac, up)
         })
       }
       case NewObjLine(ln, target, fields) => {
@@ -1365,7 +1526,7 @@ case class MethodInference(defs: Map[String, PredDef], reps: Map[String, Interna
         val ua = a2.assign(target.name, valRef)
 
         val afterAssign = KnowledgeBase(
-          ua, before.heap, before.direct, before.folded, before.info
+          ua, before.heap, before.direct, before.folded, before.info, before.partial
         )
 
         // substitute the old variable and inhale the new permissions
@@ -1388,13 +1549,60 @@ case class MethodInference(defs: Map[String, PredDef], reps: Map[String, Interna
     }
   }
 
+  private def findRequiredKnowledge(kb: KnowledgeBase, impl: ImplTerm, target: PredFieldAccTerm, depth: Int): Option[Set[LogicTerm]] = {
+    // TODO: the knowledge base could be expanded with the contained information
+    val direct: Seq[Option[Set[LogicTerm]]] = PredicateCollector.collectDirectPredicates(impl.cons, kb)
+      .filter(p => p.equals(target))
+      .map(a => Some(Set[LogicTerm]()))
+    val combined = if(depth > 0){
+      val folded = PredicateCollector.collectFoldedPredicates(impl.cons, kb)
+        .map(p => {
+          val predDef = this.defs(p.pred.name)
+          val body = predDef.instantiate(p.pred)
+          val impl = ImplTerm(BoolTerm(true), body)
+          findRequiredKnowledge(kb, impl, target, depth - 1)
+        })
+
+      val pot = PredicateCollector.collectPotSatImpls(impl.cons, kb)
+        .map(p => findRequiredKnowledge(kb, p, target, depth - 1))
+
+      folded ++ pot
+    }
+    else Seq()
+    val extended = (direct ++ combined)
+      .flatten
+      .map(v => v.union(Set(impl.prem)))
+
+    if(extended.nonEmpty){
+      Some(extended.foldLeft(Set[LogicTerm]())((a, b) => a.union(b)))
+    }
+    else {
+      None
+    }
+  }
+
+  private def findIfPotHasSolution(kb: KnowledgeBase, target: PredFieldAccTerm, amount: Term) = {
+    val implSearchDepth = 10
+    println(s"CHECKING IN IMPLICATIONS FOR: ${target.pretty()}")
+    val reqs = kb.partial.partial.toSeq
+      .flatMap(a => findRequiredKnowledge(kb, a, target, implSearchDepth))
+      .foldLeft(Set[LogicTerm]())((a, b) => a.union(b))
+
+    if(reqs.nonEmpty) {
+      // TODO: joining like this would prevent something like: (A ==> REQ)  &  (!A ==> REQ)
+      val pure = reqs.map(r => PredicateCollector.stripToPure(r, kb))
+        .foldLeft(DNF(Set(Set())))((a, b) => a.and(b))
+      println(s"ADDITIONAL REQUIREMENTS THAT NEED TO BE PROPAGATED!: ${pure.prune().pretty()}")
+    }
+  }
+
   def infer(meth: InternalMethod) = {
     val knowledge = mutable.HashMap[Ident, KnowledgeBase]()
     val counter = RefCounter(Counter(0))
 
     // generate an initial assignment based of the arguments of the method
     val initAssignment = meth.args.foldLeft(new Assignment(counter))((a, f) => a.assign(f._1, counter.freshValRef()))
-    val empty = KnowledgeBase(initAssignment, new Heap(counter), new DirectPermissionMask(), new FoldedPermissionMask(), DNF(Set(Set())))
+    val empty = KnowledgeBase(initAssignment, new Heap(counter), new DirectPermissionMask(), new FoldedPermissionMask(), DNF(Set(Set())), new Potential())
     // inhale the preconditions
     val afterPres = meth.pres.foldLeft(empty)((kb, p) => processLine(kb, InhaleLine(meth.start, p)))
     knowledge.put(meth.start, afterPres)
