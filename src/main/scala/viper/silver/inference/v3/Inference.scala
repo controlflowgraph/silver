@@ -718,6 +718,13 @@ case class KnowledgeBase(assignment: Assignment, heap: Heap, direct: DirectPermi
     }
   }
 
+  private def isClearlyZeroPerm(t: Term): Boolean = {
+    TermRewriter.simplify(t) match {
+      case PermFracTerm(IntTerm(a), _) => a.equals(BigInt.int2bigInt(0))
+      case _ => true
+    }
+  }
+
   def findUnfoldingStrategy(defs: Map[String, PredDef], fa: PredInstAccTerm): Option[RefoldingStrategy] = {
     // TODO: check if it is even possible that the permission amount is reachable
     val directAmount = this.folded.getAmount(fa.pred)
@@ -725,7 +732,9 @@ case class KnowledgeBase(assignment: Assignment, heap: Heap, direct: DirectPermi
       Some(RefoldingStrategy(Seq()))
     }
     else {
-      val mapped: Seq[PredInstAccTerm] = this.folded.permissions.map(e => PredInstAccTerm(e._1, e._2)).toSeq
+      val mapped: Seq[PredInstAccTerm] = this.folded.permissions.map(e => PredInstAccTerm(e._1, e._2))
+        .filter(i => !isClearlyZeroPerm(i.perm))
+        .toSeq
 
       val strats = mapped.flatMap(v => findUnfoldingStrategyInPredicate(defs, fa, v))
       Some(RefoldingStrategy(strats))
@@ -740,7 +749,9 @@ case class KnowledgeBase(assignment: Assignment, heap: Heap, direct: DirectPermi
       Some(RefoldingStrategy(Seq()))
     }
     else {
-      val mapped: Seq[PredInstAccTerm] = this.folded.permissions.map(e => PredInstAccTerm(e._1, e._2)).toSeq
+      val mapped: Seq[PredInstAccTerm] = this.folded.permissions.map(e => PredInstAccTerm(e._1, e._2))
+        .filter(i => !isClearlyZeroPerm(i.perm))
+        .toSeq
 
       val strats = mapped.flatMap(v => findUnfoldingStrategyInPredicate(defs, fa, v))
       Some(RefoldingStrategy(strats))
@@ -1128,7 +1139,9 @@ case class MethodInference(defs: Map[String, PredDef], reps: Map[String, Interna
         // unfold the predicate on the current level
         val unfolded = base.unfold(this.defs, pred, perm)
         // unfold all the steps within this predicate
-        subs.foldLeft(unfolded)(applyRefoldingStep)
+        // the substeps are scaled by the amount that the current unfolding actually unfolded
+        subs.map(s => s.scale(perm))
+          .foldLeft(unfolded)(applyRefoldingStep)
       }
       case c => {
         throw new IllegalArgumentException(s"Unable to process refolding step type ${c.getClass.getCanonicalName}")
@@ -1419,12 +1432,16 @@ case class MethodInference(defs: Map[String, PredDef], reps: Map[String, Interna
       case LocalAssignLine(ln, inj, variable, value) => {
         clearInjection(inj)
 
-        // TODO: check that all requirements are satisfied i.e. that all the field/pred permissions are provided
-        //       -> generate and apply refolding strategies
         val reqsValue = collectRequiredFieldPermissions(value)
-        val stratsValue = reqsValue.map(v => (v, before.findUnfoldingStrategy(this.defs, v)))
-          .flatMap(v => v._2).toSeq
-        val kb = applyStrategies(inj, before, stratsValue)
+//        val stratsValue = reqsValue.map(v => (v, before.findUnfoldingStrategy(this.defs, v)))
+//          .flatMap(v => v._2).toSeq
+//        val kb = applyStrategies(inj, before, stratsValue)
+
+        // TODO: copy this part to the field assign
+        val kb = reqsValue.foldLeft(before)((k, r) => {
+          val strat = k.findUnfoldingStrategy(this.defs, r)
+          strat.map(s => applyStrategies(inj, k, Seq(s))).getOrElse(k)
+        })
 
         reqsValue.map(p => (p, kb.direct.getAmount(p.exp)))
           .filter(p => !kb.hasEnoughPermissions(p._1.perm, p._2))
@@ -1453,24 +1470,22 @@ case class MethodInference(defs: Map[String, PredDef], reps: Map[String, Interna
         // TODO: perform the substitution
         val reqs = collectRequiredFieldPermissions(fa.src)
         val self = Set(PredFieldAccTerm(fa, PermFracTerm(IntTerm(1), IntTerm(1))))
-        //        println(s"REQUIREMENTS FROM SUB: ${reqs}")
-        //        println(s"REQUIREMENTS FROM SELF: ${self}")
-        // FIRST SEARCH ALL THE UNFOLDING STRATEGIES
-        // THEN DETERMINE THE MAXIMUM REQUIRED AMOUNTS FOR EACH UNFOLD
+
+        // TODO: this can be improved by first searching for all strategies and then deciding which strategies should be executed
+        //       -> iteratively improve current standing until final state reached
         val combined = reqs.union(self)
-        val stratsTarget = combined.map(v => (v, before.findUnfoldingStrategy(this.defs, v)))
-        //          .foreach(s => println(s"${s._1.pretty()} => ${s._2}"))
+        val kbAfterTarget = combined.foldLeft(before)((k, r) => {
+          val strat = k.findUnfoldingStrategy(this.defs, r)
+          strat.map(s => applyStrategies(inj, k, Seq(s))).getOrElse(k)
+        })
 
         val reqsValue = collectRequiredFieldPermissions(value)
-        val stratsValue = reqsValue.map(v => (v, before.findUnfoldingStrategy(this.defs, v)))
-        //          .foreach(s => println(s"${s._1.pretty()} => ${s._2}"))
+        val kbAfterValue = reqsValue.foldLeft(kbAfterTarget)((k, r) => {
+          val strat = k.findUnfoldingStrategy(this.defs, r)
+          strat.map(s => applyStrategies(inj, k, Seq(s))).getOrElse(k)
+        })
 
-
-        // apply all the unfolding strategies
-        // this can be refined with better implementations at some point in time :)
-        val combinedStrats = (stratsTarget ++ stratsValue).flatMap(v => v._2).toSeq
-
-        val kb = applyStrategies(inj, before, combinedStrats)
+        val kb = kbAfterValue
 
         val stillMissingValue = reqsValue.map(p => (p, kb.direct.getAmount(p.exp)))
           .filter(p => !kb.hasEnoughPermissions(p._1.perm, p._2))
