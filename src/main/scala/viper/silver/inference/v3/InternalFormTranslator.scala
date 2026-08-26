@@ -241,7 +241,7 @@ object InternalFormTranslator {
         val lastEls = elsTrans._3
 
         val merg = rep.freshIdent()
-        val merging = MergeLine(merg, postThnInj, postElsInj, lastThn, lastEls)
+        val merging = MergeLine(merg, ln, postThnInj, postElsInj, lastThn, lastEls)
 
         rep.addLine(merging)
         rep.addConnection(lastThn, merg)

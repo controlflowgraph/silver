@@ -60,9 +60,9 @@ case class BranchLine(ln: Ident, pre: Injection, cond: LogicTerm, thn: Ident, el
   }
 }
 
-case class MergeLine(ln: Ident, postThnInj: Injection, postElsInj: Injection, lastThn: Ident, lastEls: Ident) extends Line {
+case class MergeLine(ln: Ident, correspondingBranch: Ident, postThnInj: Injection, postElsInj: Injection, lastThn: Ident, lastEls: Ident) extends Line {
   def pretty(): String = {
-    s"${this.ln.pretty()} merge [${this.postThnInj.id} | ${this.postElsInj.id}]  [${this.lastThn.pretty()} | ${this.lastEls.pretty()}]"
+    s"${this.ln.pretty()} merge [${this.correspondingBranch}] [${this.postThnInj.id} | ${this.postElsInj.id}]  [${this.lastThn.pretty()} | ${this.lastEls.pretty()}]"
   }
 }
 
@@ -118,5 +118,13 @@ case class InternalRepresentation(counter: Counter, lines: mutable.HashMap[Ident
       .map(e => s"\t${e._1.pretty()}  ==>  ${e._2.map(_.pretty()).mkString(", ")}")
       .mkString("\n")
     s"${barrier}\ncurrent counter: ${counter.value}\nlines:\n${linesPretty}\nmesh:\n${meshPretty}\n${barrier}"
+  }
+
+  def getPredecessors(from: Ident): Set[Ident] = {
+    this.mesh.filter(e => e._2.contains(from)).keys.toSet
+  }
+
+  def getLine(ident: Ident) : Line = {
+    this.lines(ident)
   }
 }

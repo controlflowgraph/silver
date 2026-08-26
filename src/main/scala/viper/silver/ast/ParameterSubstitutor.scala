@@ -146,7 +146,7 @@ object ParameterSubstitutor {
         //        case PRangeSeq(l, low, ds, high, r) => ???
         //        case PSeqSlice(seq, l, s, d, e, r) => ???
         //        case PSize(l, seq, r) => ???
-        //        case PUnExp(op, exp) => ???
+        case e@PUnExp(op@PReserved(PSymOp.Not), exp) => PUnExp(op, ParameterSubstitutor.processParametersExp(exp, ts))(e.pos)
         //        case PUpdate(base, l, key, a, value, r) => ???
         case p@PFieldAccess(rcv, dot, idnref) => {
           val updatedExp = processParametersExp(rcv, ts)

@@ -893,6 +893,7 @@ object GenericParameterInstantiationHelper {
           val updatedExp = processParametersExp(rcv, generics)
           PFieldAccess(updatedExp, dot, idnref)(p.pos)
         }
+        case e@PUnExp(op@PReserved(PSymOp.Not), exp) => PUnExp(op, processParametersExp(exp, generics))(e.pos)
         case e => {
           println(s"UNKNOWN APPLICATION: ${e}")
           throw new IllegalArgumentException(s"Unknown application expression to process generic parameters! ${e.pretty}")

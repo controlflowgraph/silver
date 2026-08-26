@@ -223,6 +223,8 @@ trait Comparison {
   def pretty(): String
 
   def subst(ts: TermSub): Comparison
+
+  def toLogicTerm(): LogicTerm
 }
 
 case class EqCmpTerm(a: Term, b: Term) extends LogicTerm with Comparison {
@@ -245,6 +247,8 @@ case class EqCmpTerm(a: Term, b: Term) extends LogicTerm with Comparison {
   }
 
   override def negate(): Comparison = NotEqCmpTerm(this.a, this.b)
+
+  override def toLogicTerm(): LogicTerm = this
 }
 
 case class NotEqCmpTerm(a: Term, b: Term) extends LogicTerm with Comparison {
@@ -268,6 +272,8 @@ case class NotEqCmpTerm(a: Term, b: Term) extends LogicTerm with Comparison {
   }
 
   override def negate(): Comparison = EqCmpTerm(this.a, this.b)
+
+  override def toLogicTerm(): LogicTerm = this
 }
 
 case class LessCmpTerm(a: Term, b: Term) extends LogicTerm with Comparison {
@@ -291,6 +297,8 @@ case class LessCmpTerm(a: Term, b: Term) extends LogicTerm with Comparison {
   }
 
   override def negate(): Comparison = GreaterEqCmpTerm(this.a, this.b)
+
+  override def toLogicTerm(): LogicTerm = this
 }
 
 case class LessEqCmpTerm(a: Term, b: Term) extends LogicTerm with Comparison {
@@ -315,6 +323,8 @@ case class LessEqCmpTerm(a: Term, b: Term) extends LogicTerm with Comparison {
   }
 
   override def negate(): Comparison = GreaterCmpTerm(this.a, this.b)
+
+  override def toLogicTerm(): LogicTerm = this
 }
 
 case class GreaterCmpTerm(a: Term, b: Term) extends LogicTerm with Comparison {
@@ -338,6 +348,8 @@ case class GreaterCmpTerm(a: Term, b: Term) extends LogicTerm with Comparison {
   }
 
   override def negate(): Comparison = LessEqCmpTerm(this.a, this.b)
+
+  override def toLogicTerm(): LogicTerm = this
 }
 
 case class GreaterEqCmpTerm(a: Term, b: Term) extends LogicTerm with Comparison {
@@ -361,6 +373,8 @@ case class GreaterEqCmpTerm(a: Term, b: Term) extends LogicTerm with Comparison 
   }
 
   override def negate(): Comparison = LessCmpTerm(this.a, this.b)
+
+  override def toLogicTerm(): LogicTerm = this
 }
 
 object PermAmount {
@@ -392,7 +406,11 @@ case class PredInstAccTerm(pred: PredInst, perm: Term) extends LogicTerm {
 case class PredFieldAccTerm(exp: FieldAccTerm, perm: Term) extends LogicTerm {
   def substitute(ts: TermSub): Term = {
     ts.apply(PredFieldAccTerm(
-      this.exp.substitute(ts).asInstanceOf[FieldAccTerm],
+      FieldAccTerm(
+        this.exp.src.substitute(ts),
+        this.exp.field,
+        this.exp.typ
+      ),
       this.perm.substitute(ts)
     ))
   }

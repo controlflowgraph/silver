@@ -520,15 +520,28 @@ case class DNF(clauses: Set[Set[Comparison]]) {
   def substitute(ts: TermSub): DNF = {
     DNF(this.clauses.map(c => c.map(i => i.subst(ts))))
   }
+
+  def toLogicTerm(): LogicTerm = {
+    this.clauses.map(
+        c => c.map(_.toLogicTerm())
+          .reduceLeftOption(AndTerm)
+          .getOrElse(BoolTerm(true))
+      )
+      .reduceLeftOption(OrTerm)
+      .getOrElse(BoolTerm(false))
+  }
 }
 
-trait ProofResult { }
+trait ProofResult {}
+
 // represents that the current knowledge proves the statement
-object Sat extends ProofResult { }
+object Sat extends ProofResult {}
+
 // represents that the current knowledge conflicts with the statement
-object UnSat extends ProofResult { }
+object UnSat extends ProofResult {}
+
 // represents a potential satisfaction given the current knowledge
-object PotSat extends ProofResult { }
+object PotSat extends ProofResult {}
 
 case class Potential(partial: Set[ImplTerm]) {
 
@@ -559,7 +572,7 @@ case class KnowledgeBase(assignment: Assignment, heap: Heap, direct: DirectPermi
   }
 
   private def resultOfBool(value: Boolean): ProofResult = {
-    if(value) Sat
+    if (value) Sat
     else UnSat
   }
 
@@ -574,8 +587,8 @@ case class KnowledgeBase(assignment: Assignment, heap: Heap, direct: DirectPermi
       case c: Comparison => {
         val isSat = cls.contains(c)
         val isUn = cls.contains(c.negate())
-        if(isSat) Sat
-        else if(isUn) UnSat
+        if (isSat) Sat
+        else if (isUn) UnSat
         else PotSat
       }
       case ImplTerm(prem, cons) => proveClause(cls, OrTerm(NotTerm(prem), cons))
@@ -616,6 +629,7 @@ case class KnowledgeBase(assignment: Assignment, heap: Heap, direct: DirectPermi
       }
     }
   }
+
   private def mergeProofResultsConj(a: ProofResult, b: ProofResult): ProofResult = {
     (a, b) match {
       case (Sat, Sat) => Sat
@@ -1071,7 +1085,26 @@ object PredicateCollector {
   }
 }
 
+trait AdjustmentResponse[T] {}
+
+case class SuccessfulAdjustment[T]() extends AdjustmentResponse[T] {}
+
+case class FailedAdjustment[T]() extends AdjustmentResponse[T] {}
+
+// TODO: when passing and adjusting the terms in branches the branchline does not provide the correect required "before" knowledge bases for each branch
+case class ContinueAdjustment[T](cont: T) extends AdjustmentResponse[T] {}
+
+
+case class LinePropagator[T](f: (Line, T) => AdjustmentResponse[T], ltt: T => LogicTerm) {
+  def apply(l: Line, payload: T): AdjustmentResponse[T] = {
+    this.f(l, payload)
+  }
+
+  def toLT(payload: T): LogicTerm = this.ltt(payload)
+}
+
 case class MethodInference(defs: Map[String, PredDef], reps: Map[String, InternalMethod], currentMethod: InternalMethod,
+                           knowledge: mutable.HashMap[Ident, KnowledgeBase],
                            methSpec: mutable.HashMap[String, (Seq[LogicTerm], Seq[LogicTerm])],
                            injections: mutable.HashMap[Injection, Seq[RefoldingStrategy]]) {
   def merge(incoming: Seq[KnowledgeBase]): KnowledgeBase = {
@@ -1433,9 +1466,9 @@ case class MethodInference(defs: Map[String, PredDef], reps: Map[String, Interna
         clearInjection(inj)
 
         val reqsValue = collectRequiredFieldPermissions(value)
-//        val stratsValue = reqsValue.map(v => (v, before.findUnfoldingStrategy(this.defs, v)))
-//          .flatMap(v => v._2).toSeq
-//        val kb = applyStrategies(inj, before, stratsValue)
+        //        val stratsValue = reqsValue.map(v => (v, before.findUnfoldingStrategy(this.defs, v)))
+        //          .flatMap(v => v._2).toSeq
+        //        val kb = applyStrategies(inj, before, stratsValue)
 
         // TODO: copy this part to the field assign
         val kb = reqsValue.foldLeft(before)((k, r) => {
@@ -1490,14 +1523,14 @@ case class MethodInference(defs: Map[String, PredDef], reps: Map[String, Interna
         val stillMissingValue = reqsValue.map(p => (p, kb.direct.getAmount(p.exp)))
           .filter(p => !kb.hasEnoughPermissions(p._1.perm, p._2))
 
-        stillMissingValue.foreach(a => findIfPotHasSolution(kb, a._1, a._2))
+        stillMissingValue.foreach(a => findIfPotHasSolution(ln, kb, a._1, a._2))
 
         stillMissingValue.foreach(p => propagateBackFieldPermReq(ln, p._1, p._2))
 
         val stillMissingTarget = combined.map(p => (p, kb.direct.getAmount(p.exp)))
           .filter(p => !kb.hasEnoughPermissions(p._1.perm, p._2))
 
-        stillMissingTarget.foreach(a => findIfPotHasSolution(kb, a._1, a._2))
+        stillMissingTarget.foreach(a => findIfPotHasSolution(ln, kb, a._1, a._2))
 
         stillMissingTarget
           .foreach(p => propagateBackFieldPermReq(ln, p._1, p._2))
@@ -1569,7 +1602,7 @@ case class MethodInference(defs: Map[String, PredDef], reps: Map[String, Interna
     val direct: Seq[Option[Set[LogicTerm]]] = PredicateCollector.collectDirectPredicates(impl.cons, kb)
       .filter(p => p.equals(target))
       .map(a => Some(Set[LogicTerm]()))
-    val combined = if(depth > 0){
+    val combined = if (depth > 0) {
       val folded = PredicateCollector.collectFoldedPredicates(impl.cons, kb)
         .map(p => {
           val predDef = this.defs(p.pred.name)
@@ -1588,7 +1621,7 @@ case class MethodInference(defs: Map[String, PredDef], reps: Map[String, Interna
       .flatten
       .map(v => v.union(Set(impl.prem)))
 
-    if(extended.nonEmpty){
+    if (extended.nonEmpty) {
       Some(extended.foldLeft(Set[LogicTerm]())((a, b) => a.union(b)))
     }
     else {
@@ -1596,23 +1629,210 @@ case class MethodInference(defs: Map[String, PredDef], reps: Map[String, Interna
     }
   }
 
-  private def findIfPotHasSolution(kb: KnowledgeBase, target: PredFieldAccTerm, amount: Term) = {
+  // TODO: THIS DOES NOT WORK WITH THE CONTINUATION THAT PROVIDES A TERM INSTEAD OF A COMPARISON
+  //       -> THINK ABOUT HOW TO SOLVE IT
+  //           -> maybe use a second entry in the line propagator that converts a value of generic T to LogicTerm
+  //           -> and ContinueAdjustment has also this generic parameter?
+  private def propagatePureConstraintThrough[P](ident: Ident, until: Ident, lp: LinePropagator[P], payload: P): AdjustmentResponse[P] = {
+    if (ident.equals(this.currentMethod.start)) {
+      val currentSpec = this.methSpec.getOrElse(this.currentMethod.method, (Seq(), Seq()))
+      val currentPres = currentSpec._1
+      val currentPosts = currentSpec._2
+      this.methSpec.update(this.currentMethod.method, (currentPres ++ Seq(lp.toLT(payload)), currentPosts))
+      SuccessfulAdjustment[P]()
+    }
+    else if (ident.equals(until)) {
+      ContinueAdjustment(payload)
+    }
+    else {
+      val proofRes = this.knowledge(ident).proveDetailed(lp.toLT(payload))
+      if (proofRes == Sat) {
+        // knowledge is already fulfilled at the current branch and should thus not be propagated further
+        SuccessfulAdjustment[P]()
+      }
+      else if (proofRes == UnSat) {
+        // the constraint is unsatisfiable within this context -> idk how to deal with that but for know keep propagating
+        FailedAdjustment[P]()
+      }
+      else {
+        val line = this.currentMethod.rep.getLine(ident)
+        lp.apply(line, payload)
+      }
+    }
+  }
+
+  private def getNullPropagator(): LinePropagator[Term] = {
+    LinePropagator((l, p) => l match {
+        //        case AssertLine(ln, inj, exp) =>
+        //        case AssumeLine(ln, exp) =>
+        //        case BranchLine(ln, pre, cond, thn, els) =>
+        //        case CallLine(ln, inj, method, targets, args) =>
+        //        case ExhaleLine(ln, inj, exp) =>
+        //        case FieldAssignLine(ln, inj, fa, value) =>
+        //        case InhaleLine(ln, exp) =>
+        //        case LocalAssignLine(ln, inj, variable, value) =>
+        //        case MergeLine(ln, correspondingBranch, postThnInj, postElsInj, lastThn, lastEls) =>
+        case NewObjLine(ln, target, fields) => {
+          // check if target == term -> this is a contradiction since a fresh object can not be null
+          if (p.equals(target)) {
+            FailedAdjustment[Term]()
+          }
+          else if (isJustFieldsOnVariable(p)) {
+            p match {
+              case FieldAccTerm(base: VarTerm, field, _) => if (target.equals(base)) {
+                SuccessfulAdjustment[Term]()
+              }
+              else {
+                ContinueAdjustment[Term](p)
+              }
+              case _ => ContinueAdjustment[Term](p)
+            }
+          }
+          else {
+            // otherwise reverse map the assignment of the variable and replace the temporary variables within the current term
+            // TODO: fix this
+            ContinueAdjustment[Term](p)
+          }
+
+          FailedAdjustment[Term]()
+        }
+        case c => {
+          throw new IllegalArgumentException(s"Unable to process line of type ${l.getClass.getCanonicalName} while propagating null constraint!")
+        }
+      },
+      t => EqCmpTerm(t, NullTerm()))
+  }
+
+  private def isJustFieldsOnVariable(term: Term): Boolean = {
+    term match {
+      case AddTerm(a, b) => false
+      case FieldAccTerm(src, field, typ) => isJustFieldsOnVariable(term)
+      case IntTerm(value) => false
+      case term: LogicTerm => false
+      case VarTerm(name, typ) => true
+      case MulTerm(a, b) => false
+      case NegTerm(t) => false
+      case NullTerm() => false
+      case PermFracTerm(a, b) => false
+      case SubTerm(a, b) => false
+      case _ => false
+    }
+  }
+
+  private def collectFieldsAndBaseVariable(term: Term): (VarTerm, Seq[String]) = {
+    term match {
+      case FieldAccTerm(src, field, typ) => {
+        val sub = collectFieldsAndBaseVariable(src)
+        (sub._1, sub._2 ++ Seq(field))
+      }
+      case v: VarTerm => (v, Seq())
+      case _ => {
+        throw new IllegalArgumentException(s"Unable to collect base variable and fields of term: ${term.pretty()}")
+      }
+    }
+  }
+
+  private def getNonNullPropagator(): LinePropagator[Term] = {
+    LinePropagator((l, t) => {
+      l match {
+//        case AssertLine(ln, inj, exp) =>
+//        case AssumeLine(ln, exp) =>
+//        case BranchLine(ln, pre, cond, thn, els) =>
+//        case CallLine(ln, inj, method, targets, args) =>
+//        case ExhaleLine(ln, inj, exp) =>
+//        case FieldAssignLine(ln, inj, fa, value) =>
+//        case InhaleLine(ln, exp) =>
+//        case LocalAssignLine(ln, inj, variable, value) =>
+//        case MergeLine(ln, correspondingBranch, postThnInj, postElsInj, lastThn, lastEls) =>
+//        case NewObjLine(ln, target, fields) => {
+//          // check if target == term -> perfect since a fresh object is never null
+//          if (t.equals(target)) {
+//            true
+//          }
+//          else if (isJustFieldsOnVariable(t)) {
+//            false
+//            val (base, fields) = collectFieldsAndBaseVariable(t)
+//            if (base.equals(target)) {
+//              // problem since the fields are all null
+//              false
+//            }
+//            else {
+//
+//            }
+//          }
+//          else {
+//            // test if this term corresponds to a specific field of the object
+//            // otherwise reverse map the assignment of the variable and replace the temporary variables within the current term
+//            // TODO: fix this
+//          }
+//        }
+        case l => {
+          throw new IllegalArgumentException(s"Unable to prop non null through line ${l.getClass.getCanonicalName}")
+        }
+      }
+    },
+      t => NotEqCmpTerm(t, NullTerm()))
+
+  }
+
+  private def getLinePropagator(pure: Comparison): (LinePropagator[Term], Term) = {
+    pure match {
+      case EqCmpTerm(a, NullTerm()) => (getNullPropagator(), a)
+      case EqCmpTerm(NullTerm(), a) => (getNullPropagator(), a)
+      case NotEqCmpTerm(a, NullTerm()) => (getNonNullPropagator(), a)
+      case NotEqCmpTerm(NullTerm(), a) => (getNonNullPropagator(), a)
+        //      case GreaterCmpTerm(a, b) =>
+        //      case GreaterEqCmpTerm(a, b) =>
+        //      case LessCmpTerm(a, b) =>
+        //      case LessEqCmpTerm(a, b) =>
+        //      case NotEqCmpTerm(a, b) =>
+        //      case EqCmpTerm(a, b) =>
+      case c => {
+        throw new IllegalArgumentException(s"Unable to construct propagator for constraint: ${pure.pretty()}")
+      }
+    }
+  }
+
+  private def propagatePureConstraints(ident: Ident, pure: DNF): Unit = {
+    if (pure.clauses.size != 1) {
+      throw new IllegalArgumentException(s"Expected single conjunction but got disjunction of pure terms! ${pure.toLogicTerm().pretty()}")
+    }
+
+    val preds = this.currentMethod.rep.getPredecessors(ident)
+    println(s"ADDITIONAL REQUIREMENTS THAT NEED TO BE PROPAGATED!: ${pure.prune().pretty()}")
+    if (preds.size == 1) {
+      val pred = preds.head
+      pure.clauses.head.foreach(p => {
+        val (lp, pay) = getLinePropagator(p)
+        val response = propagatePureConstraintThrough(pred, this.currentMethod.start, lp, pay)
+        response match {
+          case _: SuccessfulAdjustment[Term] => println(s"Successfully propagated constraint ${p}!")
+          case _ => println("Unable to propagate constraint!")
+        }
+      })
+    }
+    else {
+      throw new IllegalArgumentException(s"Expected single predecessor of line got: ${preds.size}")
+    }
+  }
+
+  private def findIfPotHasSolution(current: Ident, kb: KnowledgeBase, target: PredFieldAccTerm, amount: Term) = {
     val implSearchDepth = 10
     println(s"CHECKING IN IMPLICATIONS FOR: ${target.pretty()}")
     val reqs = kb.partial.partial.toSeq
       .flatMap(a => findRequiredKnowledge(kb, a, target, implSearchDepth))
       .foldLeft(Set[LogicTerm]())((a, b) => a.union(b))
 
-    if(reqs.nonEmpty) {
+    if (reqs.nonEmpty) {
       // TODO: joining like this would prevent something like: (A ==> REQ)  &  (!A ==> REQ)
       val pure = reqs.map(r => PredicateCollector.stripToPure(r, kb))
         .foldLeft(DNF(Set(Set())))((a, b) => a.and(b))
-      println(s"ADDITIONAL REQUIREMENTS THAT NEED TO BE PROPAGATED!: ${pure.prune().pretty()}")
+      propagatePureConstraints(current, pure)
     }
   }
 
   def infer(meth: InternalMethod) = {
-    val knowledge = mutable.HashMap[Ident, KnowledgeBase]()
+    this.knowledge.clear()
     val counter = RefCounter(Counter(0))
 
     // generate an initial assignment based of the arguments of the method
@@ -1620,7 +1840,7 @@ case class MethodInference(defs: Map[String, PredDef], reps: Map[String, Interna
     val empty = KnowledgeBase(initAssignment, new Heap(counter), new DirectPermissionMask(), new FoldedPermissionMask(), DNF(Set(Set())), new Potential())
     // inhale the preconditions
     val afterPres = meth.pres.foldLeft(empty)((kb, p) => processLine(kb, InhaleLine(meth.start, p)))
-    knowledge.put(meth.start, afterPres)
+    this.knowledge.put(meth.start, afterPres)
 
     // initialize empty additional specs for all methods
     this.reps.keySet.foreach(k => this.methSpec.put(k, (Seq(), Seq())))
@@ -1632,7 +1852,7 @@ case class MethodInference(defs: Map[String, PredDef], reps: Map[String, Interna
     while (open.nonEmpty) {
       val current = open.head
       println(s"processing line: ${current}")
-      val kb = merge(mesh.filter(e => e._2.contains(current)).keys.map(knowledge).toSeq)
+      val kb = merge(mesh.filter(e => e._2.contains(current)).keys.map(this.knowledge).toSeq)
 
       val line = lines(current)
       println(s"line: ${line.pretty()}")
@@ -1643,7 +1863,7 @@ case class MethodInference(defs: Map[String, PredDef], reps: Map[String, Interna
       println(after.pretty())
 
 
-      knowledge.put(current, after)
+      this.knowledge.put(current, after)
 
       open = open.tail ++ mesh(current).toSeq
     }
@@ -1686,6 +1906,7 @@ case class Inference(defs: Map[String, PredDef], reps: Map[String, InternalMetho
         this.defs,
         this.reps,
         this.reps(f),
+        new mutable.HashMap(),
         this.methSpec,
         new mutable.HashMap()
       )
