@@ -78,7 +78,7 @@ case class NewObjLine(ln: Ident, target: VarTerm, fields: Seq[(String, Type)]) e
   }
 }
 
-case class InternalMethod(method: String, args: Seq[(String, Type)], res: Seq[(String, Type)], pres: Seq[LogicTerm], posts: Seq[LogicTerm], start: Ident, stop: Ident, rep: InternalRepresentation, body: Seqn) {
+case class InternalMethod(method: String, args: Seq[(String, Type)], res: Seq[(String, Type)], pres: Seq[LogicTerm], posts: Seq[LogicTerm], start: Ident, stop: Ident, rep: InternalRepresentation, body: Seqn, finalInj: Injection) {
 
 }
 

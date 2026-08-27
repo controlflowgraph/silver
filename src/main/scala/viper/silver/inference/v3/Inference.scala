@@ -571,7 +571,9 @@ case class Potential(partial: Set[ImplTerm]) {
 case class KnowledgeBase(assignment: Assignment, heap: Heap, direct: DirectPermissionMask, folded: FoldedPermissionMask, info: DNF, partial: Potential) {
 
   def prove(term: LogicTerm): Boolean = {
-    proveDetailed(term) == Sat
+    val det = proveDetailed(term)
+    println(s"PROVING ${term}   RESULTED IN ${det}")
+    det == Sat
   }
 
   private def resultOfBool(value: Boolean): ProofResult = {
@@ -1454,6 +1456,7 @@ case class MethodInference(defs: Map[String, PredDef], reps: Map[String, Interna
         val folded = PredicateCollector.collectFoldedPredicates(exp, before)
         val direct = PredicateCollector.collectDirectPredicates(exp, before)
         val stripped = PredicateCollector.stripToPure(exp, before)
+        println(s"CHECKING EXHALE ${exp.pretty()} WITH: ${folded}")
 
         val afterUnfolding = direct.foldLeft(before)((kb, d) => {
           kb.findUnfoldingStrategy(this.defs, d)
@@ -1631,7 +1634,7 @@ case class MethodInference(defs: Map[String, PredDef], reps: Map[String, Interna
               m.inhale(PredFieldAccTerm(fa, PermAmount.WRITE))
             })
             val fol = f.substitute(ts)
-            val info = i.substitute(ts)
+            val info = i.substitute(ts).and(DNF(Set(Set(NotEqCmpTerm(target, NullTerm())))))
             (a, h, dir, fol, info)
           }
         )
@@ -1965,6 +1968,13 @@ case class MethodInference(defs: Map[String, PredDef], reps: Map[String, Interna
       //        println(this.methSpec(this.currentMethod.method))
       ////        throw new IllegalArgumentException("SUBBBBBBB")
       //      }
+
+      val mergedPosts = meth.posts ++ this.methSpec(this.currentMethod.method)._2
+
+      val finInj = this.currentMethod.finalInj
+      val finalKb = this.knowledge(meth.stop)
+      val afterPosts = mergedPosts.foldLeft(finalKb)((kb, p) => processLine(kb, ExhaleLine(meth.stop, finInj, p))._2)
+      this.knowledge.put(meth.start, afterPosts)
     }
 
     // TODO: exhale post conditions

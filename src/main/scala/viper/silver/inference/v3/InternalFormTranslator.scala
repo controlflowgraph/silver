@@ -278,6 +278,12 @@ object InternalFormTranslator {
     val pres = m.pres.map(expToLogicTerm)
     val posts = m.posts.map(expToLogicTerm)
 
-    InternalMethod(m.name, args, res, pres, posts, start, transform._3, rep, transform._1)
+    val finalInj = freshInjection()
+    val body = transform._1
+    val extendedBody = Seqn(body.ss ++ Seq(finalInj), body.scopedSeqnDeclarations)()
+
+    val stopIdent = transform._3
+
+    InternalMethod(m.name, args, res, pres, posts, start, stopIdent, rep, extendedBody, finalInj)
   }
 }
