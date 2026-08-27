@@ -270,13 +270,14 @@ object InternalFormTranslator {
   def processToInternalForm(defs: Map[String, PredDef], m: Method): InternalMethod = {
     val rep = new InternalRepresentation()
     val start = rep.freshIdent()
-    val res = InternalFormTranslator.transformSeqnToInternalForm(rep, start, defs, m.bodyOrAssumeFalse, None)
+    val transform = InternalFormTranslator.transformSeqnToInternalForm(rep, start, defs, m.bodyOrAssumeFalse, None)
 
     val args = m.formalArgs.map(a => (a.name, a.typ))
+    val res = m.formalReturns.map(a => (a.name, a.typ))
 
     val pres = m.pres.map(expToLogicTerm)
     val posts = m.posts.map(expToLogicTerm)
 
-    InternalMethod(m.name, args, pres, posts, start, res._3, rep)
+    InternalMethod(m.name, args, res, pres, posts, start, transform._3, rep, transform._1)
   }
 }

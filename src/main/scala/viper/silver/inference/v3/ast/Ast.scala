@@ -1,6 +1,6 @@
 package viper.silver.inference.v3.ast
 
-import viper.silver.ast.Type
+import viper.silver.ast.{Add, And, BoolLit, EqCmp, Exp, Field, FieldAccess, FieldAccessPredicate, FractionalPerm, GeCmp, GtCmp, Implies, IntLit, LeCmp, LocalVar, LtCmp, Minus, Mul, NeCmp, Not, NullLit, Or, PredicateAccess, PredicateAccessPredicate, Sub, Type}
 import viper.silver.inference.v3.FixedPoint
 
 trait TermSub {
@@ -45,6 +45,8 @@ trait Term {
   def substitute(ts: TermSub): Term
 
   def pretty(): String
+
+  def toExp(): Exp
 }
 
 case class NullTerm() extends Term {
@@ -55,6 +57,8 @@ case class NullTerm() extends Term {
   def pretty(): String = {
     "null"
   }
+
+  override def toExp(): Exp = NullLit()()
 }
 
 case class IntTerm(value: BigInt) extends Term {
@@ -65,6 +69,8 @@ case class IntTerm(value: BigInt) extends Term {
   def pretty(): String = {
     s"${this.value}"
   }
+
+  override def toExp(): Exp = IntLit(this.value)()
 }
 
 case class PermFracTerm(a: Term, b: Term) extends Term {
@@ -78,6 +84,11 @@ case class PermFracTerm(a: Term, b: Term) extends Term {
   def pretty(): String = {
     s"${this.a.pretty()}/${this.b.pretty()}"
   }
+
+  override def toExp(): Exp = FractionalPerm(
+    this.a.toExp(),
+    this.b.toExp()
+  )()
 }
 
 case class NegTerm(t: Term) extends Term {
@@ -87,6 +98,8 @@ case class NegTerm(t: Term) extends Term {
   }
 
   override def pretty(): String = s"-${this.t.pretty()}"
+
+  override def toExp(): Exp = Minus(this.t.toExp())()
 }
 
 case class AddTerm(a: Term, b: Term) extends Term {
@@ -100,6 +113,11 @@ case class AddTerm(a: Term, b: Term) extends Term {
   def pretty(): String = {
     s"${this.a.pretty()} + ${this.b.pretty()}"
   }
+
+  override def toExp(): Exp = Add(
+    this.a.toExp(),
+    this.b.toExp()
+  )()
 }
 
 case class MulTerm(a: Term, b: Term) extends Term {
@@ -113,6 +131,8 @@ case class MulTerm(a: Term, b: Term) extends Term {
   def pretty(): String = {
     s"${this.a.pretty()} * ${this.b.pretty()}"
   }
+
+  override def toExp(): Exp = Mul(this.a.toExp(), this.b.toExp())()
 }
 
 case class SubTerm(a: Term, b: Term) extends Term {
@@ -126,6 +146,8 @@ case class SubTerm(a: Term, b: Term) extends Term {
   def pretty(): String = {
     s"${this.a.pretty()} - ${this.b.pretty()}"
   }
+
+  override def toExp(): Exp = Sub(this.a.toExp(), this.b.toExp())()
 }
 
 case class VarTerm(name: String, typ: Type) extends LogicTerm {
@@ -136,6 +158,8 @@ case class VarTerm(name: String, typ: Type) extends LogicTerm {
   def pretty(): String = {
     s"${this.name}"
   }
+
+  override def toExp(): Exp = LocalVar(this.name, this.typ)()
 }
 
 case class FieldAccTerm(src: Term, field: String, typ: Type) extends Term {
@@ -150,6 +174,8 @@ case class FieldAccTerm(src: Term, field: String, typ: Type) extends Term {
   def pretty(): String = {
     s"${this.src.pretty()}.${this.field}"
   }
+
+  override def toExp(): FieldAccess = FieldAccess(this.src.toExp(), Field(this.field, this.typ)())()
 }
 
 trait LogicTerm extends Term {
@@ -164,6 +190,8 @@ case class BoolTerm(value: Boolean) extends LogicTerm {
   def pretty(): String = {
     s"${this.value}"
   }
+
+  override def toExp(): Exp = BoolLit(this.value)()
 }
 
 case class AndTerm(a: LogicTerm, b: LogicTerm) extends LogicTerm {
@@ -177,6 +205,8 @@ case class AndTerm(a: LogicTerm, b: LogicTerm) extends LogicTerm {
   def pretty(): String = {
     s"${this.a.pretty()} && ${this.b.pretty()}"
   }
+
+  override def toExp(): Exp = And(this.a.toExp(), this.b.toExp())()
 }
 
 case class OrTerm(a: LogicTerm, b: LogicTerm) extends LogicTerm {
@@ -190,6 +220,8 @@ case class OrTerm(a: LogicTerm, b: LogicTerm) extends LogicTerm {
   def pretty(): String = {
     s"${this.a.pretty()} || ${this.b.pretty()}"
   }
+
+  override def toExp(): Exp = Or(this.a.toExp(), this.b.toExp())()
 }
 
 case class NotTerm(t: LogicTerm) extends LogicTerm {
@@ -202,6 +234,8 @@ case class NotTerm(t: LogicTerm) extends LogicTerm {
   def pretty(): String = {
     s"!${this.t.pretty()}"
   }
+
+  override def toExp(): Exp = Not(this.t.toExp())()
 }
 
 case class ImplTerm(prem: LogicTerm, cons: LogicTerm) extends LogicTerm {
@@ -215,6 +249,8 @@ case class ImplTerm(prem: LogicTerm, cons: LogicTerm) extends LogicTerm {
   def pretty(): String = {
     s"${this.prem.pretty()} ==> ${this.cons.pretty()}"
   }
+
+  override def toExp(): Exp = Implies(this.prem.toExp(), this.cons.toExp())()
 }
 
 trait Comparison {
@@ -249,6 +285,8 @@ case class EqCmpTerm(a: Term, b: Term) extends LogicTerm with Comparison {
   override def negate(): Comparison = NotEqCmpTerm(this.a, this.b)
 
   override def toLogicTerm(): LogicTerm = this
+
+  override def toExp(): Exp = EqCmp(this.a.toExp(), this.b.toExp())()
 }
 
 case class NotEqCmpTerm(a: Term, b: Term) extends LogicTerm with Comparison {
@@ -274,6 +312,8 @@ case class NotEqCmpTerm(a: Term, b: Term) extends LogicTerm with Comparison {
   override def negate(): Comparison = EqCmpTerm(this.a, this.b)
 
   override def toLogicTerm(): LogicTerm = this
+
+  override def toExp(): Exp = NeCmp(this.a.toExp(), this.b.toExp())()
 }
 
 case class LessCmpTerm(a: Term, b: Term) extends LogicTerm with Comparison {
@@ -299,6 +339,8 @@ case class LessCmpTerm(a: Term, b: Term) extends LogicTerm with Comparison {
   override def negate(): Comparison = GreaterEqCmpTerm(this.a, this.b)
 
   override def toLogicTerm(): LogicTerm = this
+
+  override def toExp(): Exp = LtCmp(this.a.toExp(), this.b.toExp())()
 }
 
 case class LessEqCmpTerm(a: Term, b: Term) extends LogicTerm with Comparison {
@@ -325,6 +367,8 @@ case class LessEqCmpTerm(a: Term, b: Term) extends LogicTerm with Comparison {
   override def negate(): Comparison = GreaterCmpTerm(this.a, this.b)
 
   override def toLogicTerm(): LogicTerm = this
+
+  override def toExp(): Exp = LeCmp(this.a.toExp(), this.b.toExp())()
 }
 
 case class GreaterCmpTerm(a: Term, b: Term) extends LogicTerm with Comparison {
@@ -350,6 +394,8 @@ case class GreaterCmpTerm(a: Term, b: Term) extends LogicTerm with Comparison {
   override def negate(): Comparison = LessEqCmpTerm(this.a, this.b)
 
   override def toLogicTerm(): LogicTerm = this
+
+  override def toExp(): Exp = GtCmp(this.a.toExp(), this.b.toExp())()
 }
 
 case class GreaterEqCmpTerm(a: Term, b: Term) extends LogicTerm with Comparison {
@@ -375,6 +421,8 @@ case class GreaterEqCmpTerm(a: Term, b: Term) extends LogicTerm with Comparison 
   override def negate(): Comparison = LessCmpTerm(this.a, this.b)
 
   override def toLogicTerm(): LogicTerm = this
+
+  override def toExp(): Exp = GeCmp(this.a.toExp(), this.b.toExp())()
 }
 
 object PermAmount {
@@ -401,6 +449,11 @@ case class PredInstAccTerm(pred: PredInst, perm: Term) extends LogicTerm {
   def pretty(): String = {
     s"acc(${this.pred.pretty()}, ${this.perm.pretty()})"
   }
+
+  override def toExp(): Exp = PredicateAccessPredicate(
+    PredicateAccess(this.pred.args.map(a => a.toExp()), this.pred.name)(),
+    Some(this.perm.toExp())
+  )()
 }
 
 case class PredFieldAccTerm(exp: FieldAccTerm, perm: Term) extends LogicTerm {
@@ -422,6 +475,10 @@ case class PredFieldAccTerm(exp: FieldAccTerm, perm: Term) extends LogicTerm {
   def pretty(): String = {
     s"acc(${this.exp.pretty()}, ${this.perm.pretty()})"
   }
+  override def toExp(): Exp = FieldAccessPredicate(
+    this.exp.toExp(),
+    Some(this.perm.toExp())
+  )()
 }
 
 object TermRewriter

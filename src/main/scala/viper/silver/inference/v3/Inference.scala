@@ -1,8 +1,6 @@
 package viper.silver.inference.v3
 
-import viper.silver.ast.{
-  AbstractAssign, AbstractDomainFuncApp, AbstractLocalVar, AccessPredicate, AnySetBinExp, AnySetExp, AnySetUnExp, Apply, Applying, Assert, Asserting, Assume, BackendFuncApp, BinExp, CondExp, DebugLabelledOld, DomainBinExp, DomainFuncApp, DomainOpExp, DomainUnExp, EmptyMap, EmptyMultiset, EmptySeq, EmptySet, EqualityCmp, Exhale, Exists, Exp, ExplicitMap, ExplicitMultiset, ExplicitSeq, ExplicitSet, ExtensionStmt, FieldAccess, FieldAccessPredicate, FieldAssign, Fold, ForPerm, Forall, FuncApp, FuncLikeApp, Function, Goto, If, Inhale, InhaleExhaleExp, Injection, Label, LabelledOld, Let, Literal, LocalVar, LocalVarAssign, LocalVarDecl, LocalVarDeclStmt, LocalVarWithVersion, LocationAccess, MagicWand, MapCardinality, MapContains, MapDomain, MapExp, MapLookup, MapRange, MapUpdate, Maplet, Method, MethodCall, MultisetExp, NewStmt, Old, OldExp, Package, PermExp, PredicateAccess, PredicateAccessPredicate, Program, QuantifiedExp, Quasihavoc, Quasihavocall, RangeSeq, Ref, Result, SeqAppend, SeqContains, SeqDrop, SeqExp, SeqIndex, SeqLength, SeqTake, SeqUpdate, Seqn, SetExp, Stmt, UnExp, Unfold, Unfolding, While
-}
+import viper.silver.ast.{AbstractAssign, AbstractDomainFuncApp, AbstractLocalVar, AccessPredicate, AnySetBinExp, AnySetExp, AnySetUnExp, Apply, Applying, Assert, Asserting, Assume, BackendFuncApp, BinExp, CondExp, DatatypeType, DebugLabelledOld, DomainBinExp, DomainFuncApp, DomainOpExp, DomainUnExp, EmptyMap, EmptyMultiset, EmptySeq, EmptySet, EqualityCmp, Exhale, Exists, Exp, ExplicitMap, ExplicitMultiset, ExplicitSeq, ExplicitSet, ExtensionStmt, FieldAccess, FieldAccessPredicate, FieldAssign, Fold, ForPerm, Forall, FuncApp, FuncLikeApp, Function, Goto, If, Inhale, InhaleExhaleExp, Injection, Label, LabelledOld, Let, Literal, LocalVar, LocalVarAssign, LocalVarDecl, LocalVarDeclStmt, LocalVarWithVersion, LocationAccess, MagicWand, MapCardinality, MapContains, MapDomain, MapExp, MapLookup, MapRange, MapUpdate, Maplet, Method, MethodCall, MultisetExp, NewStmt, Old, OldExp, Package, PermExp, PredicateAccess, PredicateAccessPredicate, Program, QuantifiedExp, Quasihavoc, Quasihavocall, RangeSeq, Ref, Result, SeqAppend, SeqContains, SeqDrop, SeqExp, SeqIndex, SeqLength, SeqTake, SeqUpdate, Seqn, SetExp, Stmt, Type, UnExp, Unfold, Unfolding, While}
 import viper.silver.inference.v3.ast._
 
 import scala.annotation.tailrec
@@ -1413,9 +1411,11 @@ case class MethodInference(defs: Map[String, PredDef], reps: Map[String, Interna
       }
       case AssumeLine(ln, exp) => {
         val stripped = PredicateCollector.stripToPure(exp, before)
-        (false, before.update(a => h => d => f => i => {
+        val resKb = before.update(a => h => d => f => i => {
           (a, h, d, f, i.and(stripped))
-        }))
+        })
+        val cleanedKb = cleanPotentialWithCurrentKnowledge(resKb)
+        (false, cleanedKb)
       }
         //      case BranchLine(ln, pre, cond, thn, els) =>
       case CallLine(ln, inj, method, targets, args) => {
@@ -1424,21 +1424,27 @@ case class MethodInference(defs: Map[String, PredDef], reps: Map[String, Interna
 
         // exhale the pres in reverse order
         val extendedPres = initial.pres ++ spec._1
-        val afterExhales = extendedPres.reverse.foldLeft(before)((kb, p) => {
+        val (shouldRestart, afterExhales) = extendedPres.reverse.foldLeft((false, before))((acc, p) => {
+          val (r, kb) = acc
           val strats = getRefoldingStrategiesAtInjectionPoint(inj)
           val (restart, result) = processLine(kb, ExhaleLine(ln, inj, p))
           val after = getRefoldingStrategiesAtInjectionPoint(inj)
           clearInjection(inj)
           addRefoldingStrategiesToInjectionPoint(inj, strats ++ after)
-          result
+          (r || restart, result)
         })
+        if (shouldRestart) {
+          (true, afterExhales)
+        }
+        else {
 
-        // inhale the posts in correct order
-        val extendedPosts = initial.posts ++ spec._2
-        // TODO: fix restart flag stuff
-        val afterInhales = extendedPosts.foldLeft(afterExhales)((kb, p) => processLine(kb, InhaleLine(ln, p))._2)
+          // inhale the posts in correct order
+          val extendedPosts = initial.posts ++ spec._2
+          // TODO: fix restart flag stuff
+          val afterInhales = extendedPosts.foldLeft(afterExhales)((kb, p) => processLine(kb, InhaleLine(ln, p))._2)
 
-        (false, afterInhales)
+          (false, afterInhales)
+        }
       }
       case ExhaleLine(ln, inj, exp) => {
         clearInjection(inj)
@@ -1543,7 +1549,7 @@ case class MethodInference(defs: Map[String, PredDef], reps: Map[String, Interna
         else {
           val someSuccessWithDirectPropVal = stillMissingValue.map(p => propagateBackFieldPermReq(ln, p._1, p._2))
             .exists(a => a)
-          if(someSuccessWithDirectPropVal){
+          if (someSuccessWithDirectPropVal) {
             (true, kb)
           }
           else {
@@ -1551,14 +1557,14 @@ case class MethodInference(defs: Map[String, PredDef], reps: Map[String, Interna
               .filter(p => !kb.hasEnoughPermissions(p._1.perm, p._2))
 
             val someSuccessWithPotTarget = stillMissingTarget.map(a => findIfPotHasSolution(ln, kb, a._1, a._2)).exists(a => a)
-            if(someSuccessWithPotTarget) {
+            if (someSuccessWithPotTarget) {
               (true, kb)
             }
             else {
               val someSuccessWithDirectPropTarget = stillMissingTarget.map(p => propagateBackFieldPermReq(ln, p._1, p._2))
                 .exists(a => a)
 
-              if(someSuccessWithDirectPropTarget) {
+              if (someSuccessWithDirectPropTarget) {
                 (true, kb)
               }
               else {
@@ -1593,7 +1599,7 @@ case class MethodInference(defs: Map[String, PredDef], reps: Map[String, Interna
         val direct = PredicateCollector.collectDirectPredicates(exp, before)
         val stripped = PredicateCollector.stripToPure(exp, before)
         val partial = PredicateCollector.collectPotSatImpls(exp, before)
-//        println(s"INHALING PARTIAL: ${partial}")
+        //        println(s"INHALING PARTIAL: ${partial}")
         val resKb = before.update((a, h, d, f, fac, pot) => {
           val ud = direct.foldLeft(d)((a, b) => a.inhale(b))
           val uf = folded.foldLeft(f)((a, b) => a.inhale(b))
@@ -1644,7 +1650,7 @@ case class MethodInference(defs: Map[String, PredDef], reps: Map[String, Interna
     val unsat = resKb.partial.partial.filter(p => resKb.proveDetailed(p.prem).equals(UnSat))
     val potsat = resKb.partial.partial.filter(p => resKb.proveDetailed(p.prem).equals(PotSat))
 
-    if(sat.isEmpty && unsat.isEmpty) {
+    if (sat.isEmpty && unsat.isEmpty) {
       resKb
     }
     else {
@@ -1814,28 +1820,29 @@ case class MethodInference(defs: Map[String, PredDef], reps: Map[String, Interna
         //        case InhaleLine(ln, exp) =>
         //        case LocalAssignLine(ln, inj, variable, value) =>
         //        case MergeLine(ln, correspondingBranch, postThnInj, postElsInj, lastThn, lastEls) =>
-        //        case NewObjLine(ln, target, fields) => {
-        //          // check if target == term -> perfect since a fresh object is never null
-        //          if (t.equals(target)) {
-        //            true
-        //          }
-        //          else if (isJustFieldsOnVariable(t)) {
-        //            false
-        //            val (base, fields) = collectFieldsAndBaseVariable(t)
-        //            if (base.equals(target)) {
-        //              // problem since the fields are all null
-        //              false
-        //            }
-        //            else {
-        //
-        //            }
-        //          }
-        //          else {
-        //            // test if this term corresponds to a specific field of the object
-        //            // otherwise reverse map the assignment of the variable and replace the temporary variables within the current term
-        //            // TODO: fix this
-        //          }
-        //        }
+        case NewObjLine(ln, target, fields) => {
+          // check if target == term -> perfect since a fresh object is never null
+          if (t.equals(target)) {
+            SuccessfulAdjustment()
+          }
+          else if (isJustFieldsOnVariable(t)) {
+            val (base, fields) = collectFieldsAndBaseVariable(t)
+            if (base.equals(target)) {
+              // problem since the fields are all null
+              FailedAdjustment()
+            }
+            else {
+              // otherwise reverse map the assignment of the variable and replace the temporary variables within the current term
+              // TODO: fix the substitution of the term
+              val subbed = t
+              ContinueAdjustment(subbed)
+            }
+          }
+          else {
+            // TODO: fix this. Is it even possible that this case is reached?
+            FailedAdjustment()
+          }
+        }
         case l => {
           throw new IllegalArgumentException(s"Unable to prop non null through line ${l.getClass.getCanonicalName}")
         }
@@ -1914,7 +1921,7 @@ case class MethodInference(defs: Map[String, PredDef], reps: Map[String, Interna
     val lines = meth.rep.lines
 
     var restarting = true
-    while(restarting){
+    while (restarting) {
       restarting = false
 
       // generate an initial assignment based of the arguments of the method
@@ -1950,14 +1957,14 @@ case class MethodInference(defs: Map[String, PredDef], reps: Map[String, Interna
         open = open.tail ++ mesh(current).toSeq
       }
 
-//      if(restarting){
-//        println("RESTARTING")
-//        println("RESTARTING")
-//        println("RESTARTING")
-//        println("RESTARTING")
-//        println(this.methSpec(this.currentMethod.method))
-////        throw new IllegalArgumentException("SUBBBBBBB")
-//      }
+      //      if(restarting){
+      //        println("RESTARTING")
+      //        println("RESTARTING")
+      //        println("RESTARTING")
+      //        println("RESTARTING")
+      //        println(this.methSpec(this.currentMethod.method))
+      ////        throw new IllegalArgumentException("SUBBBBBBB")
+      //      }
     }
 
     // TODO: exhale post conditions
@@ -1974,9 +1981,81 @@ case class Inference(defs: Map[String, PredDef], reps: Map[String, InternalMetho
     spec._2.foreach(e => println(e.pretty().indent(2)))
   }
 
+  private def createPredAccPred(pred: PredInst, perm: Term): PredicateAccessPredicate = {
+    PredicateAccessPredicate(
+      PredicateAccess(pred.args.map(e => e.toExp()), pred.name)(),
+      Some(perm.toExp())
+    )()
+  }
+
+  private def convertRefoldingStep(step: RefoldingStep): Seq[Stmt] = {
+    step match {
+      case FoldingStep(pred, perm) => {
+        Seq(Fold(createPredAccPred(pred, perm))())
+      }
+      case UnfoldingStep(pred, perm, subs) => {
+        val self = Unfold(createPredAccPred(pred, perm))()
+        val internal = subs.flatMap(s => convertRefoldingStep(s))
+        Seq(self) ++ internal
+      }
+      case _ => {
+        throw new IllegalArgumentException(s"Unable to convert refolding step of type ${step.getClass.getCanonicalName}")
+      }
+    }
+  }
+
+  private def convertRefoldingStrategy(injections: Seq[RefoldingStrategy]): Stmt = {
+    val stmts = injections.flatMap(strat => strat.steps.flatMap(convertRefoldingStep))
+    Seqn(stmts, Seq())()
+  }
+
+  private def injectRefoldingStrategySeqn(strats: Map[Injection, Seq[RefoldingStrategy]], s: Seqn): Seqn = {
+    val injected = s.ss.map(s => injectRefoldingStrategy(strats, s))
+    Seqn(injected, s.scopedSeqnDeclarations)(s.pos, s.info, s.errT)
+  }
+
+  private def injectRefoldingStrategy(strats: Map[Injection, Seq[RefoldingStrategy]], stmt: Stmt): Stmt = {
+    stmt match {
+      case i: Injection => convertRefoldingStrategy(strats(i))
+      case s: Seqn => injectRefoldingStrategySeqn(strats, s)
+      case s@If(cond, thn, els) => {
+        val mappedThn = injectRefoldingStrategy(strats, thn).asInstanceOf[Seqn]
+        val mappedEls = injectRefoldingStrategy(strats, els).asInstanceOf[Seqn]
+        If(cond, mappedThn, mappedEls)(s.pos, s.info, s.errT)
+      }
+        // TODO: extend for while stmt
+        //      case e => {
+        //        throw new IllegalArgumentException(s"Unable to inject folding story into ${e.getClass.getName}")
+        //      }
+      case s => s
+    }
+  }
+
+  private def generateDtTypeRequirement(name: String, dt: DatatypeType, lowered: Type): LogicTerm = {
+    val input = VarTerm(name, lowered)
+    ImplTerm(
+      NotEqCmpTerm(input, NullTerm()),
+      PredInstAccTerm(PredInst(dt.datatypeName, Seq(input)), PermAmount.WRITE)
+    )
+  }
+
+
   def infer(): Unit = {
     // initialize empty additional specs for all methods
-    this.reps.keySet.foreach(k => this.methSpec.put(k, (Seq(), Seq())))
+    this.reps.keySet.foreach(k => {
+      val dtBasedPres = this.program.inferInfo.typeAnnotations(k)._1.zip(this.reps(k).args)
+        .flatMap(v => v._1 match {
+          case d: DatatypeType => Some(generateDtTypeRequirement(v._2._1, d, v._2._2))
+          case _ => None
+        })
+
+      val dtBasedPosts = this.program.inferInfo.typeAnnotations(k)._2.zip(this.reps(k).res)
+        .flatMap(v => v._1 match {
+          case d: DatatypeType => Some(generateDtTypeRequirement(v._2._1, d, v._2._2))
+          case _ => None
+        })
+      this.methSpec.put(k, (dtBasedPres, dtBasedPosts))
+    })
     // TODO: maybe extend inference fields with outline information etc
 
     // TODO: example identity function
@@ -1993,13 +2072,14 @@ case class Inference(defs: Map[String, PredDef], reps: Map[String, InternalMetho
     val order = DependencyAnalysis.computeFlatTopologicalOrder(reps)
     order.foreach(f => {
       println(s"::::::::::: inferring ${f}")
+      val injections = new mutable.HashMap[Injection, Seq[RefoldingStrategy]]()
       val mi = MethodInference(
         this.defs,
         this.reps,
         this.reps(f),
         new mutable.HashMap(),
         this.methSpec,
-        new mutable.HashMap()
+        injections
       )
       val beforeSpec = this.methSpec(f)
       mi.infer(this.reps(f))
@@ -2018,6 +2098,16 @@ case class Inference(defs: Map[String, PredDef], reps: Map[String, InternalMetho
             println("---")
           })
         })
+      println("::::::::::::::::::::: INJECTIONS :::::::::::::::::")
+      this.program.methods.filter(m => m.name.equals(f))
+        .map(m => {
+          val (addPres, addPosts) = this.methSpec(f)
+          val extPres = m.pres ++ addPres.map(_.toExp())
+          val extPosts = m.posts ++ addPosts.map(_.toExp())
+          val injectedBody = injectRefoldingStrategySeqn(injections.toMap, this.reps(f).body)
+          Method(m.name, m.formalArgs, m.formalReturns, extPres, extPosts, Some(injectedBody))()
+        })
+        .foreach(v => println(v))
     })
 
     println("::::::::::::::::::::: FULL ADD. SPEC. :::::::::::::::::")

@@ -1,6 +1,6 @@
 package viper.silver.inference.v3.ast
 
-import viper.silver.ast.{Injection, Type}
+import viper.silver.ast.{Injection, Seqn, Type}
 import viper.silver.inference.v3.Counter
 
 import scala.collection.mutable
@@ -78,7 +78,7 @@ case class NewObjLine(ln: Ident, target: VarTerm, fields: Seq[(String, Type)]) e
   }
 }
 
-case class InternalMethod(method: String, args: Seq[(String, Type)], pres: Seq[LogicTerm], posts: Seq[LogicTerm], start: Ident, stop: Ident, rep: InternalRepresentation) {
+case class InternalMethod(method: String, args: Seq[(String, Type)], res: Seq[(String, Type)], pres: Seq[LogicTerm], posts: Seq[LogicTerm], start: Ident, stop: Ident, rep: InternalRepresentation, body: Seqn) {
 
 }
 
