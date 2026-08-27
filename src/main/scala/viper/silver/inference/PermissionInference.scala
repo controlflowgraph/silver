@@ -25,3 +25,8 @@ object PermissionInference {
     }
   }
 }
+
+// TODO: example that creates a list of the first n numbers
+// TODO: allow assume only with pure information -> put into documentation
+// TODO: maybe use viper to prove something
+//       -> check if entailment proof can show that an unfolding strategy is able to 

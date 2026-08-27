@@ -44,6 +44,9 @@ object InternalFormTranslator {
       case add: Add => AddTerm(expToTerm(add.left), expToTerm(add.right))
       case add: Sub => SubTerm(expToTerm(add.left), expToTerm(add.right))
       case frac: FractionalPerm => PermFracTerm(expToTerm(frac.left), expToTerm(frac.right))
+      case cp: CurrentPerm => {
+        throw new IllegalArgumentException(s"Error converting current perm exp: ${cp}")
+      }
       case _: EqCmp => expToLogicTerm(exp)
       case _: NeCmp => expToLogicTerm(exp)
       case _: LtCmp => expToLogicTerm(exp)
@@ -74,6 +77,10 @@ object InternalFormTranslator {
       case eq: LeCmp => LessEqCmpTerm(expToTerm(eq.left), expToTerm(eq.right))
       case eq: GtCmp => GreaterCmpTerm(expToTerm(eq.left), expToTerm(eq.right))
       case eq: GeCmp => GreaterEqCmpTerm(expToTerm(eq.left), expToTerm(eq.right))
+      case eq: PermLtCmp => LessCmpTerm(expToTerm(eq.left), expToTerm(eq.right))
+      case eq: PermLeCmp => LessEqCmpTerm(expToTerm(eq.left), expToTerm(eq.right))
+      case eq: PermGtCmp => GreaterCmpTerm(expToTerm(eq.left), expToTerm(eq.right))
+      case eq: PermGeCmp => GreaterEqCmpTerm(expToTerm(eq.left), expToTerm(eq.right))
       case and: And => AndTerm(expToLogicTerm(and.left), expToLogicTerm(and.right))
       case or: Or => OrTerm(expToLogicTerm(or.left), expToLogicTerm(or.right))
       case impl: Implies => ImplTerm(expToLogicTerm(impl.left), expToLogicTerm(impl.right))

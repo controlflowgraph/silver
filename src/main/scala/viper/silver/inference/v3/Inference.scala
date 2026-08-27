@@ -2026,7 +2026,7 @@ case class Inference(defs: Map[String, PredDef], reps: Map[String, InternalMetho
 
   private def injectRefoldingStrategy(strats: Map[Injection, Seq[RefoldingStrategy]], stmt: Stmt): Stmt = {
     stmt match {
-      case i: Injection => convertRefoldingStrategy(strats(i))
+      case i: Injection => convertRefoldingStrategy(strats.getOrElse(i, Seq()))
       case s: Seqn => injectRefoldingStrategySeqn(strats, s)
       case s@If(cond, thn, els) => {
         val mappedThn = injectRefoldingStrategy(strats, thn).asInstanceOf[Seqn]
