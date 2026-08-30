@@ -117,10 +117,9 @@ trait DefaultPhases extends Frontend {
   val SemanticAnalysis = Phase("Semantic Analysis", semanticAnalysis _)
   val Translation      = Phase("Translation",       translation _)
   val ConsistencyCheck = Phase("Consistency Check", consistencyCheck _)
-  val Inference     = Phase("Inference",      inference _)
   val Verification     = Phase("Verification",      verification _)
 
-  val phases = Seq(Parsing, SemanticAnalysis, Translation, ConsistencyCheck, Inference)
+  val phases = Seq(Parsing, SemanticAnalysis, Translation, ConsistencyCheck)
 
   /** Parse the program. */
   def parsing(): Unit
@@ -136,9 +135,6 @@ trait DefaultPhases extends Frontend {
 
   /** Verify the Viper program using a verifier. */
   def verification(): Unit
-
-  /** Infer the Viper program using the inference algorithm. */
-  def inference(): Unit
 }
 
 trait SingleFileFrontend {

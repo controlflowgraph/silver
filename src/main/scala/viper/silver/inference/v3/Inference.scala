@@ -1,7 +1,12 @@
 package viper.silver.inference.v3
 
-import viper.silver.ast.{AbstractAssign, AbstractDomainFuncApp, AbstractLocalVar, AccessPredicate, AnySetBinExp, AnySetExp, AnySetUnExp, Apply, Applying, Assert, Asserting, Assume, BackendFuncApp, BinExp, CondExp, DatatypeType, DebugLabelledOld, DomainBinExp, DomainFuncApp, DomainOpExp, DomainUnExp, EmptyMap, EmptyMultiset, EmptySeq, EmptySet, EqualityCmp, Exhale, Exists, Exp, ExplicitMap, ExplicitMultiset, ExplicitSeq, ExplicitSet, ExtensionStmt, FieldAccess, FieldAccessPredicate, FieldAssign, Fold, ForPerm, Forall, FuncApp, FuncLikeApp, Function, Goto, If, Inhale, InhaleExhaleExp, Injection, Label, LabelledOld, Let, Literal, LocalVar, LocalVarAssign, LocalVarDecl, LocalVarDeclStmt, LocalVarWithVersion, LocationAccess, MagicWand, MapCardinality, MapContains, MapDomain, MapExp, MapLookup, MapRange, MapUpdate, Maplet, Method, MethodCall, MultisetExp, NewStmt, Old, OldExp, Package, PermExp, PredicateAccess, PredicateAccessPredicate, Program, QuantifiedExp, Quasihavoc, Quasihavocall, RangeSeq, Ref, Result, SeqAppend, SeqContains, SeqDrop, SeqExp, SeqIndex, SeqLength, SeqTake, SeqUpdate, Seqn, SetExp, Stmt, Type, UnExp, Unfold, Unfolding, While}
+import viper.silver.ast.{
+  AbstractAssign, AbstractDomainFuncApp, AbstractLocalVar, AccessPredicate, And, AnySetBinExp, AnySetExp, AnySetUnExp, Apply, Applying, Assert, Asserting, Assume, BackendFuncApp, BinExp, BoolLit, CondExp, DatatypeType, DebugLabelledOld, Declaration, DomainBinExp, DomainFuncApp, DomainOpExp, DomainUnExp, EmptyMap, EmptyMultiset, EmptySeq, EmptySet, EqCmp, EqualityCmp, Exhale, Exists, Exp, ExplicitMap, ExplicitMultiset, ExplicitSeq, ExplicitSet, ExtensionStmt, Field, FieldAccess, FieldAccessPredicate, FieldAssign, Fold, ForPerm, Forall, FractionalPerm, FuncApp, FuncLikeApp, Function, Goto, If, InferInfo, Inhale, InhaleExhaleExp, Injection, IntLit, Label, LabelledOld, Let, Literal, LocalVar, LocalVarAssign, LocalVarDecl, LocalVarDeclStmt, LocalVarWithVersion, LocationAccess, MagicWand, MapCardinality, MapContains, MapDomain, MapExp, MapLookup, MapRange, MapUpdate, Maplet, Method, MethodCall, MultisetExp, NewStmt, Old, OldExp, Or, Package, PermExp, PredicateAccess, PredicateAccessPredicate, Program, QuantifiedExp, Quasihavoc, Quasihavocall, RangeSeq, Ref, Result, SeqAppend, SeqContains, SeqDrop, SeqExp, SeqIndex, SeqLength, SeqTake, SeqUpdate, Seqn, SetExp, Stmt, Type, UnExp, Unfold, Unfolding, While
+}
+import viper.silver.frontend.MinimalViperFrontendAPI
 import viper.silver.inference.v3.ast._
+import viper.silver.verifier.errors.AssertFailed
+import viper.silver.verifier.{AbortedExceptionally, CliOptionError, ConsistencyError, DependencyNotFoundError, Failure, ParseReport, Success, TimeoutOccurred, TypecheckerError, TypecheckerWarning, VerificationError, VerificationResult, Verifier, VerifierWarning}
 
 import scala.annotation.tailrec
 import scala.collection.mutable
@@ -309,29 +314,45 @@ case class ValRef(id: Int) {
   def pretty(): String = {
     s"ref::${this.id}"
   }
+
+  def toVarName(): String = {
+    s"t$$${this.id}"
+  }
+
+  def toVarTerm(typ: Type): VarTerm = {
+    VarTerm(toVarName(), typ)
+  }
 }
 
-case class Assignment(rc: RefCounter, variables: Map[String, ValRef]) {
+case class Assignment(rc: RefCounter, variables: Map[String, (ValRef, Type)]) {
   def this(rc: RefCounter) = {
     this(rc, Map())
   }
 
-  def assign(name: String, ref: ValRef): Assignment = {
-    Assignment(this.rc, this.variables.updated(name, ref))
+  def assign(name: String, ref: ValRef, typ: Type): Assignment = {
+    Assignment(this.rc, this.variables.updated(name, (ref, typ)))
   }
 
   def pretty(): String = {
-    this.variables.map(e => s"${e._1}: ${e._2.pretty()}").mkString("\n")
+    this.variables.map(e => s"${e._1}: ${e._2._1.pretty()} (${e._2._2})").mkString("\n")
   }
 
-  def lookup(name: String): (Assignment, ValRef) = {
+  def lookup(name: String, typ: Type): (Assignment, ValRef) = {
     if (this.variables.contains(name)) {
-      (this, this.variables(name))
+      (this, this.variables(name)._1)
     }
     else {
-      val fresh = this.rc.freshValRef()
-      (Assignment(this.rc, this.variables.updated(name, fresh)), fresh)
+      val fresh = (this.rc.freshValRef(), typ)
+      (Assignment(this.rc, this.variables.updated(name, fresh)), fresh._1)
     }
+  }
+
+  def variableNames: Seq[String] = {
+    this.variables.keySet.toSeq
+  }
+
+  def getVariableTyp(name: String): Type = {
+    this.variables(name)._2
   }
 }
 
@@ -1108,7 +1129,8 @@ case class LinePropagator[T](f: (Line, T) => AdjustmentResponse[T], ltt: T => Lo
   def toLT(payload: T): LogicTerm = this.ltt(payload)
 }
 
-case class MethodInference(defs: Map[String, PredDef], reps: Map[String, InternalMethod], currentMethod: InternalMethod,
+case class MethodInference(verifier: Verifier, program: Program,
+                           defs: Map[String, PredDef], reps: Map[String, InternalMethod], currentMethod: InternalMethod,
                            knowledge: mutable.HashMap[Ident, KnowledgeBase],
                            methSpec: mutable.HashMap[String, (Seq[LogicTerm], Seq[LogicTerm])],
                            injections: mutable.HashMap[Injection, Seq[RefoldingStrategy]]) {
@@ -1343,8 +1365,8 @@ case class MethodInference(defs: Map[String, PredDef], reps: Map[String, Interna
 
         (a2, h2, fresh)
       }
-      case VarTerm(name, _) => {
-        val (a, r) = assignment.lookup(name)
+      case VarTerm(name, typ) => {
+        val (a, r) = assignment.lookup(name, typ)
         (a, heap, r)
       }
       case MulTerm(left, right) => {
@@ -1396,6 +1418,14 @@ case class MethodInference(defs: Map[String, PredDef], reps: Map[String, Interna
         val folded = PredicateCollector.collectFoldedPredicates(exp, before)
         val direct = PredicateCollector.collectDirectPredicates(exp, before)
         val stripped = PredicateCollector.stripToPure(exp, before)
+
+        direct.foreach(d => {
+          println(s"::::::::::::::::::::::::::::::::::::::")
+          println(s"CHECKING FRO DIRECT PREDICATE EXISTENCE: ${d}")
+          ViperProofChecker.prove(this.verifier, this.program, before, d)
+          println(s"::::::::::::::::::::::::::::::::::::::")
+        })
+
 
         val afterUnfolding = direct.foldLeft(before)((kb, d) => {
           kb.findUnfoldingStrategy(this.defs, d)
@@ -1499,11 +1529,11 @@ case class MethodInference(defs: Map[String, PredDef], reps: Map[String, Interna
           .filter(p => !kb.hasEnoughPermissions(p._1.perm, p._2))
           .foreach(p => propagateBackFieldPermReq(ln, p._1, p._2))
 
-        val (a2, refBeforeAssign) = before.assignment.lookup(variable.name)
+        val (a2, refBeforeAssign) = before.assignment.lookup(variable.name, variable.typ)
         val (a3, h3, valRef) = computeValueRef(a2, before.heap, value)
-        val ua = a3.assign(variable.name, valRef)
+        val ua = a3.assign(variable.name, valRef, variable.typ)
 
-        val ts = MapTermSub(Map((variable, VarTerm(s"t$$${refBeforeAssign.id}", variable.typ))))
+        val ts = MapTermSub(Map((variable, refBeforeAssign.toVarTerm(variable.typ))))
         val subbedInfo = kb.info.substitute(ts).and(DNF(Set(Set(EqCmpTerm(variable, value)))))
         val resKb = KnowledgeBase(
           ua,
@@ -1617,9 +1647,9 @@ case class MethodInference(defs: Map[String, PredDef], reps: Map[String, Interna
       }
       case NewObjLine(ln, target, fields) => {
         // perform the assignment
-        val (a2, refBeforeAssign) = before.assignment.lookup(target.name)
+        val (a2, refBeforeAssign) = before.assignment.lookup(target.name, target.typ)
         val valRef = a2.rc.freshValRef()
-        val ua = a2.assign(target.name, valRef)
+        val ua = a2.assign(target.name, valRef, target.typ)
 
         val afterAssign = KnowledgeBase(
           ua, before.heap, before.direct, before.folded, before.info, before.partial
@@ -1928,7 +1958,7 @@ case class MethodInference(defs: Map[String, PredDef], reps: Map[String, Interna
       restarting = false
 
       // generate an initial assignment based of the arguments of the method
-      val initAssignment = meth.args.foldLeft(new Assignment(counter))((a, f) => a.assign(f._1, counter.freshValRef()))
+      val initAssignment = meth.args.foldLeft(new Assignment(counter))((a, f) => a.assign(f._1, counter.freshValRef(), f._2))
       val empty = KnowledgeBase(initAssignment, new Heap(counter), new DirectPermissionMask(), new FoldedPermissionMask(), DNF(Set(Set())), new Potential())
 
       // inhale the preconditions
@@ -1982,7 +2012,7 @@ case class MethodInference(defs: Map[String, PredDef], reps: Map[String, Interna
 }
 
 
-case class Inference(defs: Map[String, PredDef], reps: Map[String, InternalMethod], program: Program, methSpec: mutable.HashMap[String, (Seq[LogicTerm], Seq[LogicTerm])]) {
+case class Inference(verifier: Verifier, defs: Map[String, PredDef], reps: Map[String, InternalMethod], program: Program, methSpec: mutable.HashMap[String, (Seq[LogicTerm], Seq[LogicTerm])]) {
 
   def printSpec(spec: (Seq[LogicTerm], Seq[LogicTerm])): Unit = {
     println("pres:")
@@ -2084,6 +2114,8 @@ case class Inference(defs: Map[String, PredDef], reps: Map[String, InternalMetho
       println(s"::::::::::: inferring ${f}")
       val injections = new mutable.HashMap[Injection, Seq[RefoldingStrategy]]()
       val mi = MethodInference(
+        this.verifier,
+        this.program,
         this.defs,
         this.reps,
         this.reps(f),
@@ -2108,7 +2140,7 @@ case class Inference(defs: Map[String, PredDef], reps: Map[String, InternalMetho
             println("---")
           })
         })
-      println("::::::::::::::::::::: INJECTIONS :::::::::::::::::")
+      println("::::::::::::::::::::: ADJUSTED METHOD :::::::::::::::::")
       this.program.methods.filter(m => m.name.equals(f))
         .map(m => {
           val (addPres, addPosts) = this.methSpec(f)
@@ -2125,7 +2157,207 @@ case class Inference(defs: Map[String, PredDef], reps: Map[String, InternalMetho
       println(s"==== ${e._1} ====")
       printSpec(e._2)
     })
+
+
   }
 }
 
-// TODO: proof algorithm is too simple and does not support more suffisticated reasoning: y != null <==> null != y
+// TODO: proof algorithm is too simple and does not support more sophisticated reasoning: y != null <==> null != y
+
+object ViperProofChecker {
+  private def joinAll[T](sets: Seq[Set[T]]): Set[T] = {
+    sets.foldLeft(Set[T]())((a, b) => a.union(b))
+  }
+
+  private def getVariablesFromTerms(terms: Seq[Term]): Set[VarTerm] = {
+    joinAll(terms.map(getVariablesFromTerm))
+  }
+
+  private def getVariablesFromTerm(term: Term): Set[VarTerm] = {
+    term match {
+      case AddTerm(a, b) => getVariablesFromTerms(Seq(a, b))
+      case FieldAccTerm(src, field, typ) => getVariablesFromTerm(src)
+      case IntTerm(value) => Set()
+      case AndTerm(a, b) => getVariablesFromTerms(Seq(a, b))
+      case BoolTerm(value) => Set()
+      case EqCmpTerm(a, b) => getVariablesFromTerms(Seq(a, b))
+      case GreaterCmpTerm(a, b) => getVariablesFromTerms(Seq(a, b))
+      case GreaterEqCmpTerm(a, b) => getVariablesFromTerms(Seq(a, b))
+      case ImplTerm(prem, cons) => getVariablesFromTerms(Seq(prem, cons))
+      case LessCmpTerm(a, b) => getVariablesFromTerms(Seq(a, b))
+      case LessEqCmpTerm(a, b) => getVariablesFromTerms(Seq(a, b))
+      case NotEqCmpTerm(a, b) => getVariablesFromTerms(Seq(a, b))
+      case NotTerm(t) => getVariablesFromTerm(t)
+      case OrTerm(a, b) => getVariablesFromTerms(Seq(a, b))
+      case PredFieldAccTerm(exp, perm) => getVariablesFromTerms(Seq(exp, perm))
+      case PredInstAccTerm(pred, perm) => getVariablesFromTerms(pred.args ++ Seq(perm))
+      case v: VarTerm => Set(v)
+      case MulTerm(a, b) => getVariablesFromTerms(Seq(a, b))
+      case NegTerm(t) => getVariablesFromTerm(t)
+      case NullTerm() => Set()
+      case PermFracTerm(a, b) => getVariablesFromTerms(Seq(a, b))
+      case SubTerm(a, b) => getVariablesFromTerms(Seq(a, b))
+      case t => {
+        throw new IllegalArgumentException(s"Unable to extract variables from term of type ${t.getClass.getCanonicalName}")
+      }
+    }
+  }
+
+  private def getVariablesOfKnowledgeBase(fieldTypes: Map[String, Type], kb: KnowledgeBase): Set[VarTerm] = {
+    val fromAssignment = kb.assignment.variables.map(v => VarTerm(v._1, v._2._2)).toSet
+    val fromAssignmentValRefs = kb.assignment.variables.map(v => v._2._1.toVarTerm(v._2._2)).toSet
+    // TODO: is this a safe mapping or could it contain variables that are actually primitive?
+    val fromHeap = kb.heap.objMap.map(v => v._1.toVarTerm(Ref)).toSet
+    val fromHeapFields = kb.heap.objMap.flatMap(v => {
+      v._2.fields.map(f => {
+        val typ = fieldTypes(f._1)
+        f._2.toVarTerm(typ)
+      })
+    }).toSet
+    val fromDirect = kb.direct.permissions.map(a => getVariablesFromTerms(Seq(a._1, a._2)))
+    val fromFolded = kb.folded.permissions.map(f => getVariablesFromTerms(f._1.args ++ Seq(f._2)))
+    val fromPartial = getVariablesFromTerms(kb.partial.partial.toSeq)
+    val fromInfo = joinAll(kb.info.clauses.map(c => getVariablesFromTerms(c.map(v => v.toLogicTerm()).toSeq)).toSeq)
+
+    val combined = Seq(fromAssignment, fromAssignmentValRefs, fromHeap, fromHeapFields, fromPartial, fromInfo) ++ fromDirect ++ fromFolded
+    joinAll(combined)
+  }
+
+  def proveWithPotential(verifier: Verifier, program: Program, kb: KnowledgeBase, target: LogicTerm): ProofResult = {
+    val resNormal = prove(verifier, program, kb, target)
+    resNormal match {
+      case Sat => Sat
+      case UnSat => {
+        val resNegated = prove(verifier, program, kb, NotTerm(target))
+        resNegated match {
+          case Sat => UnSat
+          case UnSat => PotSat
+        }
+      }
+    }
+  }
+
+  def prove(verifier: Verifier, program: Program, kb: KnowledgeBase, target: LogicTerm): ProofResult = {
+    // generate mapping of field definitions to their corresponding type
+    val fieldTypes = program.fields.map(f => f.name -> f.typ).toMap
+
+    // get the variables used in all kinds of terms in the knowledge base
+    val usedVars = getVariablesOfKnowledgeBase(fieldTypes, kb)
+    val decls = usedVars.map(e => LocalVarDecl(e.name, e.typ)()).toSeq
+
+
+    // inhale the available field permissions
+    val directInhales: Seq[Stmt] = kb.direct.permissions.map(e => {
+      val faccExp = e._1.toExp()
+      val permExp = e._2.toExp()
+      Inhale(FieldAccessPredicate(faccExp, Some(permExp))())()
+    }).toSeq
+
+    // inhale the available predicate permissions
+    val foldedInhales: Seq[Stmt] = kb.folded.permissions.map(e => {
+      val predAcc = PredicateAccess(
+        e._1.args.map(e => e.toExp()),
+        e._1.name
+      )()
+      val permExp = e._2.toExp()
+      Inhale(PredicateAccessPredicate(predAcc, Some(permExp))())()
+    }).toSeq
+
+    // inhale partial/potential permissions
+    // (maybe useless since these are parts which are unproven)
+    val partialInhales = kb.partial.partial.map(i => {
+      Inhale(i.toExp())()
+    }).toSeq
+
+    // inhale the pure information
+    val infoInhales = Inhale(kb.info.clauses.map(
+        c => c.map(a => a.toLogicTerm().toExp())
+          .reduceLeftOption((a, b) => And(a, b)())
+          .getOrElse(BoolLit(b = true)())
+      )
+      .reduceLeftOption((a, b) => Or(a, b)())
+      .getOrElse(BoolLit(b = false)()))()
+
+    // generate equivalence information within the assignment
+    val equivInfoFromAssignment = kb.assignment.variables.map(v => {
+        val typ = v._2._2
+        val variable = VarTerm(v._1, typ)
+        val value = v._2._1.toVarTerm(typ)
+        EqCmpTerm(variable, value)
+      })
+      .map(v => v.toExp())
+      .map(v => Inhale(v)())
+
+    // generate equivalence information within the heap
+    val equivInfoFromHeap = kb.heap.objMap.flatMap(v => {
+        val obj = v._1.toVarTerm(Ref)
+        v._2.fields.map(f => {
+          val typ = fieldTypes(f._1)
+          val field = FieldAccTerm(obj, f._1, typ)
+          val res = f._2.toVarTerm(typ)
+          EqCmpTerm(field, res)
+        })
+      })
+      .map(v => v.toExp())
+      .map(v => Inhale(v)())
+
+
+    // assertion for the term that needs to be proven
+    val targetAssertion = Assert(target.toExp())()
+
+    // generate abstract methods
+    // (might be useless since no method calls are present generated inhale/assert statements)
+    val methodStubs = program.methods.map(m => Method(
+      m.name,
+      m.formalArgs,
+      m.formalReturns,
+      m.pres,
+      m.posts,
+      None
+    )())
+
+    // combine all statements into a method and join into a method
+    // with the contextual information about the fields etc
+    val stmts: Seq[Stmt] = directInhales ++ foldedInhales ++ partialInhales ++ equivInfoFromAssignment ++ equivInfoFromHeap ++ Seq(infoInhales) ++ Seq(targetAssertion)
+
+    val body = Seqn(
+      stmts,
+      decls
+    )()
+
+    println("PROOF SPEC:")
+    println(body)
+
+    val proofMethod = Method(
+      "proof",
+      Seq(),
+      Seq(),
+      Seq(),
+      Seq(),
+      Some(body)
+    )()
+
+    val methods = methodStubs ++ Seq(proofMethod)
+
+    val proofProgram = Program(
+      program.domains,
+      program.fields,
+      program.functions,
+      program.predicates,
+      methods,
+      program.extensions,
+      new InferInfo()
+    )()
+
+    verifier.start()
+    val result = verifier.verify(proofProgram)
+    verifier.stop()
+
+    println(s"VERIFICATION RESULT: ${result}")
+
+    result match {
+      case Success => Sat
+      case Failure(errors) => UnSat
+    }
+  }
+}

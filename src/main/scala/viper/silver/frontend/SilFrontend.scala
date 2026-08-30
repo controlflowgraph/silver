@@ -263,18 +263,6 @@ trait SilFrontend extends DefaultFrontend {
     }
   }
 
-  override def inference(): Unit = {
-    if(_errors.isEmpty) {
-      _program match {
-        case Some(value) => {
-          _program = PermissionInference.process(value)
-          println(s"PROGRAM AFTER INFERENCE: ${_program}")
-        }
-        case None =>
-      }
-    }
-  }
-
   override def verification(): Unit = {
     def filter(input: Program): Result[Program] = {
       plugins.beforeMethodFilter(input) match {

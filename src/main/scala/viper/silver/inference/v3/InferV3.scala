@@ -2,10 +2,11 @@ package viper.silver.inference.v3
 
 import viper.silver.ast.Program
 import viper.silver.inference.v3.ast.{CallLine, FieldAssignLine, InternalMethod, PredDef}
+import viper.silver.verifier.{VerificationResult, Verifier}
 
 import scala.collection.mutable
 
-case class InferV3(program: Program) {
+case class InferV3(program: Program, verifier: Verifier) {
 
   private def transformMethodsToInternalRepresentation(defs: Map[String, PredDef]): Map[String, InternalMethod] = {
     this.program.methods.map(m => {
@@ -26,7 +27,7 @@ case class InferV3(program: Program) {
 
     val reps = transformMethodsToInternalRepresentation(defs)
 
-    Inference(defs, reps, this.program, new mutable.HashMap()).infer()
+    Inference(this.verifier, defs, reps, this.program, new mutable.HashMap()).infer()
 
     None
   }

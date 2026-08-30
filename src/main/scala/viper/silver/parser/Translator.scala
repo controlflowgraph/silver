@@ -196,9 +196,9 @@ case class Translator(program: PProgram) {
       datatypeTemplateInfos.put(d.idndef.name, d.typVarsSeq.map(_.idndef.name))
     })
 
-    println(s"preparing templates: ${dts}")
+//    println(s"preparing templates: ${dts}")
     dts.foreach(d => {
-      println(s"preparing the datatype ${d.idndef.name}")
+//      println(s"preparing the datatype ${d.idndef.name}")
       val dt = DatatypeTemplate(
         d.typVarsSeq.map(_.idndef.name),
         d.idndef.name,
@@ -328,7 +328,7 @@ case class Translator(program: PProgram) {
     //    println("FIELDS:")
     //    filteredFields.foreach(println)
 
-    println(s"C MESSAGES: ${Consistency.messages}")
+//    println(s"C MESSAGES: ${Consistency.messages}")
 
     if (Consistency.messages.isEmpty) Some(finalProgram) // all error messages generated during translation should be Consistency messages
     else None

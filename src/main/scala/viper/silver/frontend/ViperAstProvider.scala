@@ -58,7 +58,7 @@ class ViperAstProvider(override val reporter: Reporter,
   }
 
   // Verification phase omitted
-  override val phases: Seq[Phase] = Seq(Parsing, SemanticAnalysis, Translation, ConsistencyCheck, Inference)
+  override val phases: Seq[Phase] = Seq(Parsing, SemanticAnalysis, Translation, ConsistencyCheck)
 
   override def result: VerificationResult = {
 
