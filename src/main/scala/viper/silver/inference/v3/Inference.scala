@@ -590,93 +590,6 @@ case class Potential(partial: Set[ImplTerm]) {
 }
 
 case class KnowledgeBase(assignment: Assignment, heap: Heap, direct: DirectPermissionMask, folded: FoldedPermissionMask, info: DNF, partial: Potential) {
-
-  def prove(term: LogicTerm): Boolean = {
-    val det = proveDetailed(term)
-    println(s"PROVING ${term}   RESULTED IN ${det}")
-    det == Sat
-  }
-
-  private def resultOfBool(value: Boolean): ProofResult = {
-    if (value) Sat
-    else UnSat
-  }
-
-  def proveClause(cls: Set[Comparison], term: LogicTerm): ProofResult = {
-    term match {
-      case AndTerm(a, b) => {
-        val resA = proveClause(cls, a)
-        val resB = proveClause(cls, b)
-        mergeProofResultsConj(resA, resB)
-      }
-      case BoolTerm(value) => resultOfBool(value)
-      case c: Comparison => {
-        val isSat = cls.contains(c)
-        val isUn = cls.contains(c.negate())
-        if (isSat) Sat
-        else if (isUn) UnSat
-        else PotSat
-      }
-      case ImplTerm(prem, cons) => proveClause(cls, OrTerm(NotTerm(prem), cons))
-      case NotTerm(t) => {
-        val resT = proveClause(cls, t)
-        resT match {
-          case PotSat => PotSat
-          case Sat => UnSat
-          case UnSat => Sat
-          case _ => {
-            throw new IllegalArgumentException(s"Unable to negate proof result ${resT}")
-          }
-        }
-      }
-      case OrTerm(a, b) => {
-        val resA = proveClause(cls, a)
-        val resB = proveClause(cls, b)
-        mergeProofResultsDis(resA, resB)
-      }
-      case _ => {
-        throw new IllegalArgumentException(s"Unable to process term of type ${term.getClass.getCanonicalName} while proving")
-      }
-    }
-  }
-
-  private def mergeProofResultsDis(a: ProofResult, b: ProofResult): ProofResult = {
-    (a, b) match {
-      case (Sat, Sat) => Sat
-      case (Sat, UnSat) => Sat
-      case (UnSat, Sat) => Sat
-      case (UnSat, UnSat) => UnSat
-      case (Sat, PotSat) => Sat
-      case (PotSat, Sat) => Sat
-      case (PotSat, UnSat) => PotSat
-      case (UnSat, PotSat) => PotSat
-      case _ => {
-        throw new IllegalArgumentException(s"Unknown combination of proof results ${a} & ${b}")
-      }
-    }
-  }
-
-  private def mergeProofResultsConj(a: ProofResult, b: ProofResult): ProofResult = {
-    (a, b) match {
-      case (Sat, Sat) => Sat
-      case (Sat, UnSat) => UnSat
-      case (UnSat, Sat) => UnSat
-      case (UnSat, UnSat) => UnSat
-      case (Sat, PotSat) => PotSat
-      case (PotSat, Sat) => PotSat
-      case (PotSat, UnSat) => UnSat
-      case (UnSat, PotSat) => UnSat
-      case _ => {
-        throw new IllegalArgumentException(s"Unknown combination of proof results ${a} & ${b}")
-      }
-    }
-  }
-
-  def proveDetailed(term: LogicTerm): ProofResult = {
-    this.info.clauses.map(c => proveClause(c, term))
-      .foldLeft(Sat.asInstanceOf[ProofResult])(mergeProofResultsConj)
-  }
-
   def update(fun: Assignment => Heap => DirectPermissionMask => FoldedPermissionMask => DNF => (Assignment, Heap, DirectPermissionMask, FoldedPermissionMask, DNF)): KnowledgeBase = {
     update((a, h, d, f, i, p) => {
       val res = fun(a)(h)(d)(f)(i)
@@ -715,15 +628,15 @@ case class KnowledgeBase(assignment: Assignment, heap: Heap, direct: DirectPermi
   // TODO: add max search depth to the re/unfolding search
   private def searchDepth: Int = 10
 
-  def findUnfoldingStrategyInPredicate(defs: Map[String, PredDef], fa: PredInstAccTerm, instance: PredInstAccTerm): Option[RefoldingStep] = {
+  def findUnfoldingStrategyInPredicate(engine: ReasoningEngine, defs: Map[String, PredDef], fa: PredInstAccTerm, instance: PredInstAccTerm): Option[RefoldingStep] = {
     val predDef = defs(instance.pred.name)
     val instantiated = predDef.instantiate(instance.pred)
     // TODO: EXTEND THE KNOWLEDGE WITH THE PURE INFORMATION WHEN UNFOLDING
-    val pure = PredicateCollector.stripToPure(instantiated, this)
+    val pure = PredicateCollector.stripToPure(engine, instantiated, this)
 
-    val direct = PredicateCollector.collectDirectPredicates(instantiated, this)
-    val folded = PredicateCollector.collectFoldedPredicates(instantiated, this)
-    val subs = folded.flatMap(v => findUnfoldingStrategyInPredicate(defs, fa, v))
+    val direct = PredicateCollector.collectDirectPredicates(engine, instantiated, this)
+    val folded = PredicateCollector.collectFoldedPredicates(engine, instantiated, this)
+    val subs = folded.flatMap(v => findUnfoldingStrategyInPredicate(engine, defs, fa, v))
 
     val containedOnDirectLevel = folded.exists(v => v.pred.equals(fa.pred))
     val containedOnSubLevel = subs.nonEmpty
@@ -737,15 +650,15 @@ case class KnowledgeBase(assignment: Assignment, heap: Heap, direct: DirectPermi
   }
 
 
-  def findUnfoldingStrategyInPredicate(defs: Map[String, PredDef], fa: PredFieldAccTerm, instance: PredInstAccTerm): Option[RefoldingStep] = {
+  def findUnfoldingStrategyInPredicate(engine: ReasoningEngine, defs: Map[String, PredDef], fa: PredFieldAccTerm, instance: PredInstAccTerm): Option[RefoldingStep] = {
     val predDef = defs(instance.pred.name)
     val instantiated = predDef.instantiate(instance.pred)
     // TODO: EXTEND THE KNOWLEDGE WITH THE PURE INFORMATION WHEN UNFOLDING
-    val pure = PredicateCollector.stripToPure(instantiated, this)
+    val pure = PredicateCollector.stripToPure(engine, instantiated, this)
 
-    val direct = PredicateCollector.collectDirectPredicates(instantiated, this)
-    val folded = PredicateCollector.collectFoldedPredicates(instantiated, this)
-    val subs = folded.flatMap(v => findUnfoldingStrategyInPredicate(defs, fa, v))
+    val direct = PredicateCollector.collectDirectPredicates(engine, instantiated, this)
+    val folded = PredicateCollector.collectFoldedPredicates(engine, instantiated, this)
+    val subs = folded.flatMap(v => findUnfoldingStrategyInPredicate(engine, defs, fa, v))
 
     val containedOnDirectLevel = direct.exists(v => v.exp.equals(fa.exp))
     val containedOnSubLevel = subs.nonEmpty
@@ -765,7 +678,7 @@ case class KnowledgeBase(assignment: Assignment, heap: Heap, direct: DirectPermi
     }
   }
 
-  def findUnfoldingStrategy(defs: Map[String, PredDef], fa: PredInstAccTerm): Option[RefoldingStrategy] = {
+  def findUnfoldingStrategy(engine: ReasoningEngine, defs: Map[String, PredDef], fa: PredInstAccTerm): Option[RefoldingStrategy] = {
     // TODO: check if it is even possible that the permission amount is reachable
     val directAmount = this.folded.getAmount(fa.pred)
     if (hasEnoughPermissions(fa.perm, directAmount)) {
@@ -776,13 +689,13 @@ case class KnowledgeBase(assignment: Assignment, heap: Heap, direct: DirectPermi
         .filter(i => !isClearlyZeroPerm(i.perm))
         .toSeq
 
-      val strats = mapped.flatMap(v => findUnfoldingStrategyInPredicate(defs, fa, v))
+      val strats = mapped.flatMap(v => findUnfoldingStrategyInPredicate(engine, defs, fa, v))
       Some(RefoldingStrategy(strats))
     }
   }
 
 
-  def findUnfoldingStrategy(defs: Map[String, PredDef], fa: PredFieldAccTerm): Option[RefoldingStrategy] = {
+  def findUnfoldingStrategy(engine: ReasoningEngine, defs: Map[String, PredDef], fa: PredFieldAccTerm): Option[RefoldingStrategy] = {
     // TODO: check if it is even possible that the permission amount is reachable
     val directAmount = this.direct.getAmount(fa.exp)
     if (hasEnoughPermissions(fa.perm, directAmount)) {
@@ -793,7 +706,7 @@ case class KnowledgeBase(assignment: Assignment, heap: Heap, direct: DirectPermi
         .filter(i => !isClearlyZeroPerm(i.perm))
         .toSeq
 
-      val strats = mapped.flatMap(v => findUnfoldingStrategyInPredicate(defs, fa, v))
+      val strats = mapped.flatMap(v => findUnfoldingStrategyInPredicate(engine, defs, fa, v))
       Some(RefoldingStrategy(strats))
 
       //      val res = findContainedFieldPermission(defs, mapped, fa.pred, 0)
@@ -806,14 +719,14 @@ case class KnowledgeBase(assignment: Assignment, heap: Heap, direct: DirectPermi
     }
   }
 
-  def unfold(defs: Map[String, PredDef], pred: PredInst, perm: Term): KnowledgeBase = {
+  def unfold(engine: ReasoningEngine, defs: Map[String, PredDef], pred: PredInst, perm: Term): KnowledgeBase = {
     update(a => h => d => f => i => {
       val predDef = defs(pred.name)
 
       val instantiated = predDef.instantiate(pred)
-      val direct = PredicateCollector.collectDirectPredicates(instantiated, this)
-      val folded = PredicateCollector.collectFoldedPredicates(instantiated, this)
-      val pure = PredicateCollector.stripToPure(instantiated, this)
+      val direct = PredicateCollector.collectDirectPredicates(engine, instantiated, this)
+      val folded = PredicateCollector.collectFoldedPredicates(engine, instantiated, this)
+      val pure = PredicateCollector.stripToPure(engine, instantiated, this)
 
       val ud = direct
         .map(d => PredFieldAccTerm(d.exp, MulTerm(d.perm, perm)))
@@ -827,14 +740,14 @@ case class KnowledgeBase(assignment: Assignment, heap: Heap, direct: DirectPermi
     })
   }
 
-  def fold(defs: Map[String, PredDef], pred: PredInst, perm: Term): KnowledgeBase = {
+  def fold(engine: ReasoningEngine, defs: Map[String, PredDef], pred: PredInst, perm: Term): KnowledgeBase = {
     update(a => h => d => f => i => {
       val predDef = defs(pred.name)
 
       val instantiated = predDef.instantiate(pred)
-      val direct = PredicateCollector.collectDirectPredicates(instantiated, this)
-      val folded = PredicateCollector.collectFoldedPredicates(instantiated, this)
-      val pure = PredicateCollector.stripToPure(instantiated, this)
+      val direct = PredicateCollector.collectDirectPredicates(engine, instantiated, this)
+      val folded = PredicateCollector.collectFoldedPredicates(engine, instantiated, this)
+      val pure = PredicateCollector.stripToPure(engine, instantiated, this)
 
       val ud = direct
         .map(d => PredFieldAccTerm(d.exp, MulTerm(d.perm, perm)))
@@ -869,30 +782,30 @@ case class KnowledgeBase(assignment: Assignment, heap: Heap, direct: DirectPermi
       .map(v => RefoldingStrategy(v))
   }
 
-  private def attemptRefolding(defs: Map[String, PredDef], f: PredInstAccTerm): Option[RefoldingStrategy] = {
+  private def attemptRefolding(engine: ReasoningEngine, defs: Map[String, PredDef], f: PredInstAccTerm): Option[RefoldingStrategy] = {
     val predDef = defs(f.pred.name)
 
     val instantiated = predDef.instantiate(f.pred)
-    val direct = PredicateCollector.collectDirectPredicates(instantiated, this)
-    val folded = PredicateCollector.collectFoldedPredicates(instantiated, this)
-    val pure = PredicateCollector.stripToPure(instantiated, this)
+    val direct = PredicateCollector.collectDirectPredicates(engine, instantiated, this)
+    val folded = PredicateCollector.collectFoldedPredicates(engine, instantiated, this)
+    val pure = PredicateCollector.stripToPure(engine, instantiated, this)
 
-    val mappedDirect = direct.map(d => findUnfoldingStrategy(defs, d))
-    val mappedFolded = folded.map(f => findRefoldingStrategy(defs, f))
+    val mappedDirect = direct.map(d => findUnfoldingStrategy(engine, defs, d))
+    val mappedFolded = folded.map(f => findRefoldingStrategy(engine, defs, f))
 
     mergeRefoldingStrategyOptions(mappedDirect ++ mappedFolded)
       .map(r => RefoldingStrategy(r.steps ++ Seq(FoldingStep(f.pred, f.perm))))
   }
 
-  def findRefoldingStrategy(defs: Map[String, PredDef], f: PredInstAccTerm): Option[RefoldingStrategy] = {
+  def findRefoldingStrategy(engine: ReasoningEngine, defs: Map[String, PredDef], f: PredInstAccTerm): Option[RefoldingStrategy] = {
     val current = this.folded.getAmount(f.pred)
     if (hasEnoughPermissions(f.perm, current)) {
       Some(RefoldingStrategy(Seq()))
     } else {
       // check if the predicate can be unfolded
-      val unfolding = findUnfoldingStrategy(defs, f)
+      val unfolding = findUnfoldingStrategy(engine, defs, f)
       // check if the predicate can be folded (potentially by unfolding some other predicate)
-      val refolding = attemptRefolding(defs, f)
+      val refolding = attemptRefolding(engine, defs, f)
       (unfolding, refolding) match {
         case (Some(a), Some(b)) => Some(RefoldingStrategy(a.steps ++ b.steps))
         case (Some(a), None) => Some(a)
@@ -936,7 +849,7 @@ case class RefoldingStrategy(steps: Seq[RefoldingStep]) {
 }
 
 object PredicateCollector {
-  def collectPotSatImpls(term: LogicTerm, kb: KnowledgeBase): Seq[ImplTerm] = {
+  def collectPotSatImpls(engine: ReasoningEngine, term: LogicTerm, kb: KnowledgeBase): Seq[ImplTerm] = {
     term match {
       case _: BoolTerm => Seq()
       case _: EqCmpTerm => Seq()
@@ -945,13 +858,13 @@ object PredicateCollector {
       case _: LessCmpTerm => Seq()
       case _: LessEqCmpTerm => Seq()
       case _: NotEqCmpTerm => Seq()
-      case AndTerm(a, b) => collectPotSatImpls(a, kb) ++ collectPotSatImpls(b, kb)
+      case AndTerm(a, b) => collectPotSatImpls(engine, a, kb) ++ collectPotSatImpls(engine, b, kb)
       case impl@ImplTerm(prem, cons) => {
-        if (kb.proveDetailed(prem) == PotSat) Seq(impl)
+        if (engine.prove(kb, prem) == PotSat) Seq(impl)
         else Seq()
       }
       case NotTerm(t) => {
-        val included = collectPotSatImpls(t, kb)
+        val included = collectPotSatImpls(engine, t, kb)
         if (included.nonEmpty) {
           throw new IllegalArgumentException("Field access predicates within negation!")
         }
@@ -959,11 +872,11 @@ object PredicateCollector {
       }
       case OrTerm(a, b) => {
         // based on the assumption that viper does not support disjunctions with resource access stuff
-        val includedA = collectPotSatImpls(a, kb)
+        val includedA = collectPotSatImpls(engine, a, kb)
         if (includedA.nonEmpty) {
           throw new IllegalArgumentException("Field access predicates within disjunction!")
         }
-        val includedB = collectPotSatImpls(b, kb)
+        val includedB = collectPotSatImpls(engine, b, kb)
         if (includedB.nonEmpty) {
           throw new IllegalArgumentException("Field access predicates within disjunction!")
         }
@@ -979,7 +892,7 @@ object PredicateCollector {
   }
 
 
-  def collectDirectPredicates(term: LogicTerm, kb: KnowledgeBase): Seq[PredFieldAccTerm] = {
+  def collectDirectPredicates(engine: ReasoningEngine, term: LogicTerm, kb: KnowledgeBase): Seq[PredFieldAccTerm] = {
     term match {
       case _: BoolTerm => Seq()
       case _: EqCmpTerm => Seq()
@@ -988,13 +901,13 @@ object PredicateCollector {
       case _: LessCmpTerm => Seq()
       case _: LessEqCmpTerm => Seq()
       case _: NotEqCmpTerm => Seq()
-      case AndTerm(a, b) => collectDirectPredicates(a, kb) ++ collectDirectPredicates(b, kb)
+      case AndTerm(a, b) => collectDirectPredicates(engine, a, kb) ++ collectDirectPredicates(engine, b, kb)
       case ImplTerm(prem, cons) => {
-        if (kb.prove(prem)) collectDirectPredicates(cons, kb)
+        if (engine.prove(kb, prem) == Sat) collectDirectPredicates(engine, cons, kb)
         else Seq()
       }
       case NotTerm(t) => {
-        val included = collectDirectPredicates(t, kb)
+        val included = collectDirectPredicates(engine, t, kb)
         if (included.nonEmpty) {
           throw new IllegalArgumentException("Field access predicates within negation!")
         }
@@ -1002,11 +915,11 @@ object PredicateCollector {
       }
       case OrTerm(a, b) => {
         // based on the assumption that viper does not support disjunctions with resource access stuff
-        val includedA = collectDirectPredicates(a, kb)
+        val includedA = collectDirectPredicates(engine, a, kb)
         if (includedA.nonEmpty) {
           throw new IllegalArgumentException("Field access predicates within disjunction!")
         }
-        val includedB = collectDirectPredicates(b, kb)
+        val includedB = collectDirectPredicates(engine, b, kb)
         if (includedB.nonEmpty) {
           throw new IllegalArgumentException("Field access predicates within disjunction!")
         }
@@ -1021,7 +934,7 @@ object PredicateCollector {
     }
   }
 
-  def stripToPure(term: LogicTerm, kb: KnowledgeBase): DNF = {
+  def stripToPure(engine: ReasoningEngine, term: LogicTerm, kb: KnowledgeBase): DNF = {
     term match {
       case BoolTerm(value) => {
         if (value) DNF(Set(Set()))
@@ -1034,12 +947,12 @@ object PredicateCollector {
       case v: LessEqCmpTerm => DNF(Set(Set(v)))
       case v: NotEqCmpTerm => DNF(Set(Set(v)))
       case AndTerm(a, b) => {
-        val dnfA = stripToPure(a, kb)
-        val dnfB = stripToPure(b, kb)
+        val dnfA = stripToPure(engine, a, kb)
+        val dnfB = stripToPure(engine, b, kb)
         dnfA.and(dnfB)
       }
       case ImplTerm(prem, cons) => {
-        if (kb.prove(prem)) stripToPure(cons, kb)
+        if (engine.prove(kb, prem) == Sat) stripToPure(engine, cons, kb)
         else DNF(Set(Set()))
       }
       case NotTerm(t) => {
@@ -1050,12 +963,12 @@ object PredicateCollector {
         (!A & !D | !B & !D | !C & !D) | (!A & !E | !B & !E | !C & !E) | (!A & !F | !B & !F | !C & !F)
 
         */
-        stripToPure(t, kb).negate().prune()
+        stripToPure(engine, t, kb).negate().prune()
       }
       case OrTerm(a, b) => {
         // based on the assumption that viper does not support disjunctions with resource access stuff
-        val dnfA = stripToPure(a, kb)
-        val dnfB = stripToPure(b, kb)
+        val dnfA = stripToPure(engine, a, kb)
+        val dnfB = stripToPure(engine, b, kb)
         dnfA.or(dnfB)
       }
       case _: PredFieldAccTerm => DNF(Set(Set()))
@@ -1068,7 +981,7 @@ object PredicateCollector {
   }
 
 
-  def collectFoldedPredicates(term: LogicTerm, kb: KnowledgeBase): Seq[PredInstAccTerm] = {
+  def collectFoldedPredicates(engine: ReasoningEngine, term: LogicTerm, kb: KnowledgeBase): Seq[PredInstAccTerm] = {
     term match {
       case _: BoolTerm => Seq()
       case _: EqCmpTerm => Seq()
@@ -1077,13 +990,13 @@ object PredicateCollector {
       case _: LessCmpTerm => Seq()
       case _: LessEqCmpTerm => Seq()
       case _: NotEqCmpTerm => Seq()
-      case AndTerm(a, b) => collectFoldedPredicates(a, kb) ++ collectFoldedPredicates(b, kb)
+      case AndTerm(a, b) => collectFoldedPredicates(engine, a, kb) ++ collectFoldedPredicates(engine, b, kb)
       case ImplTerm(prem, cons) => {
-        if (kb.prove(prem)) collectFoldedPredicates(cons, kb)
+        if (engine.prove(kb, prem) == Sat) collectFoldedPredicates(engine, cons, kb)
         else Seq()
       }
       case NotTerm(t) => {
-        val included = collectFoldedPredicates(t, kb)
+        val included = collectFoldedPredicates(engine, t, kb)
         if (included.nonEmpty) {
           throw new IllegalArgumentException("Predicates within negation!")
         }
@@ -1091,11 +1004,11 @@ object PredicateCollector {
       }
       case OrTerm(a, b) => {
         // based on the assumption that viper does not support disjunctions with resource access stuff
-        val includedA = collectFoldedPredicates(a, kb)
+        val includedA = collectFoldedPredicates(engine, a, kb)
         if (includedA.nonEmpty) {
           throw new IllegalArgumentException("Predicates within disjunction!")
         }
-        val includedB = collectFoldedPredicates(b, kb)
+        val includedB = collectFoldedPredicates(engine, b, kb)
         if (includedB.nonEmpty) {
           throw new IllegalArgumentException("Predicates within disjunction!")
         }
@@ -1129,7 +1042,7 @@ case class LinePropagator[T](f: (Line, T) => AdjustmentResponse[T], ltt: T => Lo
   def toLT(payload: T): LogicTerm = this.ltt(payload)
 }
 
-case class MethodInference(verifier: Verifier, program: Program,
+case class MethodInference(engine: ReasoningEngine,
                            defs: Map[String, PredDef], reps: Map[String, InternalMethod], currentMethod: InternalMethod,
                            knowledge: mutable.HashMap[Ident, KnowledgeBase],
                            methSpec: mutable.HashMap[String, (Seq[LogicTerm], Seq[LogicTerm])],
@@ -1186,22 +1099,22 @@ case class MethodInference(verifier: Verifier, program: Program,
     }
   }
 
-  private def applyRefoldingStep(base: KnowledgeBase, step: RefoldingStep): KnowledgeBase = {
+  private def applyRefoldingStep(engine: ReasoningEngine, base: KnowledgeBase, step: RefoldingStep): KnowledgeBase = {
     step match {
       case FoldingStep(pred, perm) => {
         // if in the future the folding step has sub steps to fold other stuff beforehand then
         // insert the folding here before folding self
 
         // fold self
-        base.fold(this.defs, pred, perm)
+        base.fold(engine, this.defs, pred, perm)
       }
       case UnfoldingStep(pred, perm, subs) => {
         // unfold the predicate on the current level
-        val unfolded = base.unfold(this.defs, pred, perm)
+        val unfolded = base.unfold(engine, this.defs, pred, perm)
         // unfold all the steps within this predicate
         // the substeps are scaled by the amount that the current unfolding actually unfolded
         subs.map(s => s.scale(perm))
-          .foldLeft(unfolded)(applyRefoldingStep)
+          .foldLeft(unfolded)((a, b) => applyRefoldingStep(engine, a, b))
       }
       case c => {
         throw new IllegalArgumentException(s"Unable to process refolding step type ${c.getClass.getCanonicalName}")
@@ -1209,13 +1122,13 @@ case class MethodInference(verifier: Verifier, program: Program,
     }
   }
 
-  private def applyRefoldingStrategy(inj: Injection, before: KnowledgeBase, strat: RefoldingStrategy): KnowledgeBase = {
+  private def applyRefoldingStrategy(engine: ReasoningEngine, inj: Injection, before: KnowledgeBase, strat: RefoldingStrategy): KnowledgeBase = {
     addRefoldingStrategiesToInjectionPoint(inj, Seq(strat))
-    strat.steps.foldLeft(before)(applyRefoldingStep)
+    strat.steps.foldLeft(before)((a, b) => applyRefoldingStep(engine, a, b))
   }
 
-  private def applyStrategies(inj: Injection, before: KnowledgeBase, strats: Seq[RefoldingStrategy]): KnowledgeBase = {
-    strats.foldLeft(before)((kb, s) => applyRefoldingStrategy(inj, kb, s))
+  private def applyStrategies(engine: ReasoningEngine, inj: Injection, before: KnowledgeBase, strats: Seq[RefoldingStrategy]): KnowledgeBase = {
+    strats.foldLeft(before)((kb, s) => applyRefoldingStrategy(engine, inj, kb, s))
   }
 
   // TODO: maybe simplify the value ref computation and return option val ref to signal that a primitive type is returned
@@ -1415,34 +1328,34 @@ case class MethodInference(verifier: Verifier, program: Program,
       case AssertLine(ln, inj, exp) => {
         clearInjection(inj)
 
-        val folded = PredicateCollector.collectFoldedPredicates(exp, before)
-        val direct = PredicateCollector.collectDirectPredicates(exp, before)
-        val stripped = PredicateCollector.stripToPure(exp, before)
+        val folded = PredicateCollector.collectFoldedPredicates(this.engine, exp, before)
+        val direct = PredicateCollector.collectDirectPredicates(this.engine, exp, before)
+        val stripped = PredicateCollector.stripToPure(this.engine, exp, before)
 
         direct.foreach(d => {
           println(s"::::::::::::::::::::::::::::::::::::::")
           println(s"CHECKING FRO DIRECT PREDICATE EXISTENCE: ${d}")
-          ViperProofChecker.prove(this.verifier, this.program, before, d)
+          this.engine.prove(before, d)
           println(s"::::::::::::::::::::::::::::::::::::::")
         })
 
 
         val afterUnfolding = direct.foldLeft(before)((kb, d) => {
-          kb.findUnfoldingStrategy(this.defs, d)
-            .map(s => applyRefoldingStrategy(inj, kb, s))
+          kb.findUnfoldingStrategy(this.engine, this.defs, d)
+            .map(s => applyRefoldingStrategy(this.engine, inj, kb, s))
             .getOrElse(kb)
         })
 
         val afterRefolding = folded.foldLeft(afterUnfolding)((kb, f) => {
-          kb.findRefoldingStrategy(this.defs, f)
-            .map(s => applyRefoldingStrategy(inj, kb, s))
+          kb.findRefoldingStrategy(this.engine, this.defs, f)
+            .map(s => applyRefoldingStrategy(this.engine, inj, kb, s))
             .getOrElse(kb)
         })
 
         (false, afterRefolding)
       }
       case AssumeLine(ln, exp) => {
-        val stripped = PredicateCollector.stripToPure(exp, before)
+        val stripped = PredicateCollector.stripToPure(this.engine, exp, before)
         val resKb = before.update(a => h => d => f => i => {
           (a, h, d, f, i.and(stripped))
         })
@@ -1483,20 +1396,20 @@ case class MethodInference(verifier: Verifier, program: Program,
 
         // TODO: check that all requirements are satisfied i.e. that all the field/pred permissions are provided
         //       -> generate and apply refolding strategies
-        val folded = PredicateCollector.collectFoldedPredicates(exp, before)
-        val direct = PredicateCollector.collectDirectPredicates(exp, before)
-        val stripped = PredicateCollector.stripToPure(exp, before)
+        val folded = PredicateCollector.collectFoldedPredicates(this.engine, exp, before)
+        val direct = PredicateCollector.collectDirectPredicates(this.engine, exp, before)
+        val stripped = PredicateCollector.stripToPure(this.engine, exp, before)
         println(s"CHECKING EXHALE ${exp.pretty()} WITH: ${folded}")
 
         val afterUnfolding = direct.foldLeft(before)((kb, d) => {
-          kb.findUnfoldingStrategy(this.defs, d)
-            .map(s => applyRefoldingStrategy(inj, kb, s))
+          kb.findUnfoldingStrategy(this.engine, this.defs, d)
+            .map(s => applyRefoldingStrategy(this.engine, inj, kb, s))
             .getOrElse(kb)
         })
 
         val afterRefolding = folded.foldLeft(afterUnfolding)((kb, f) => {
-          kb.findRefoldingStrategy(this.defs, f)
-            .map(s => applyRefoldingStrategy(inj, kb, s))
+          kb.findRefoldingStrategy(this.engine, this.defs, f)
+            .map(s => applyRefoldingStrategy(this.engine, inj, kb, s))
             .getOrElse(kb)
         })
 
@@ -1521,8 +1434,8 @@ case class MethodInference(verifier: Verifier, program: Program,
 
         // TODO: copy this part to the field assign
         val kb = reqsValue.foldLeft(before)((k, r) => {
-          val strat = k.findUnfoldingStrategy(this.defs, r)
-          strat.map(s => applyStrategies(inj, k, Seq(s))).getOrElse(k)
+          val strat = k.findUnfoldingStrategy(this.engine, this.defs, r)
+          strat.map(s => applyStrategies(this.engine, inj, k, Seq(s))).getOrElse(k)
         })
 
         reqsValue.map(p => (p, kb.direct.getAmount(p.exp)))
@@ -1558,14 +1471,14 @@ case class MethodInference(verifier: Verifier, program: Program,
         //       -> iteratively improve current standing until final state reached
         val combined = reqs.union(self)
         val kbAfterTarget = combined.foldLeft(before)((k, r) => {
-          val strat = k.findUnfoldingStrategy(this.defs, r)
-          strat.map(s => applyStrategies(inj, k, Seq(s))).getOrElse(k)
+          val strat = k.findUnfoldingStrategy(this.engine, this.defs, r)
+          strat.map(s => applyStrategies(this.engine, inj, k, Seq(s))).getOrElse(k)
         })
 
         val reqsValue = collectRequiredFieldPermissions(value)
         val kbAfterValue = reqsValue.foldLeft(kbAfterTarget)((k, r) => {
-          val strat = k.findUnfoldingStrategy(this.defs, r)
-          strat.map(s => applyStrategies(inj, k, Seq(s))).getOrElse(k)
+          val strat = k.findUnfoldingStrategy(this.engine, this.defs, r)
+          strat.map(s => applyStrategies(this.engine, inj, k, Seq(s))).getOrElse(k)
         })
 
         val kb = kbAfterValue
@@ -1628,10 +1541,10 @@ case class MethodInference(verifier: Verifier, program: Program,
 
       }
       case InhaleLine(ln, exp) => {
-        val folded = PredicateCollector.collectFoldedPredicates(exp, before)
-        val direct = PredicateCollector.collectDirectPredicates(exp, before)
-        val stripped = PredicateCollector.stripToPure(exp, before)
-        val partial = PredicateCollector.collectPotSatImpls(exp, before)
+        val folded = PredicateCollector.collectFoldedPredicates(this.engine, exp, before)
+        val direct = PredicateCollector.collectDirectPredicates(this.engine, exp, before)
+        val stripped = PredicateCollector.stripToPure(this.engine, exp, before)
+        val partial = PredicateCollector.collectPotSatImpls(this.engine, exp, before)
         //        println(s"INHALING PARTIAL: ${partial}")
         val resKb = before.update((a, h, d, f, fac, pot) => {
           val ud = direct.foldLeft(d)((a, b) => a.inhale(b))
@@ -1678,10 +1591,10 @@ case class MethodInference(verifier: Verifier, program: Program,
   }
 
   private def cleanPotentialWithCurrentKnowledge(resKb: KnowledgeBase): KnowledgeBase = {
-    val sat = resKb.partial.partial.filter(p => resKb.proveDetailed(p.prem).equals(Sat))
+    val sat = resKb.partial.partial.filter(p => this.engine.prove(resKb, p.prem).equals(Sat))
       .map(p => p.cons)
-    val unsat = resKb.partial.partial.filter(p => resKb.proveDetailed(p.prem).equals(UnSat))
-    val potsat = resKb.partial.partial.filter(p => resKb.proveDetailed(p.prem).equals(PotSat))
+    val unsat = resKb.partial.partial.filter(p => this.engine.prove(resKb, p.prem).equals(UnSat))
+    val potsat = resKb.partial.partial.filter(p => this.engine.prove(resKb, p.prem).equals(PotSat))
 
     if (sat.isEmpty && unsat.isEmpty) {
       resKb
@@ -1689,10 +1602,10 @@ case class MethodInference(verifier: Verifier, program: Program,
     else {
       val redPot = resKb.update((a, h, d, f, i, _) => (a, h, d, f, i, Potential(potsat)))
       sat.foldLeft(redPot)((kb, r) => {
-        val dirs = PredicateCollector.collectDirectPredicates(r, kb)
-        val folds = PredicateCollector.collectFoldedPredicates(r, kb)
-        val pots = PredicateCollector.collectPotSatImpls(r, kb)
-        val pure = PredicateCollector.stripToPure(r, kb)
+        val dirs = PredicateCollector.collectDirectPredicates(this.engine, r, kb)
+        val folds = PredicateCollector.collectFoldedPredicates(this.engine, r, kb)
+        val pots = PredicateCollector.collectPotSatImpls(this.engine, r, kb)
+        val pure = PredicateCollector.stripToPure(this.engine, r, kb)
         kb.update((a, h, d, f, i, p) => {
           val ud = dirs.foldLeft(d)((a, b) => a.inhale(b))
           val uf = folds.foldLeft(f)((a, b) => a.inhale(b))
@@ -1707,11 +1620,11 @@ case class MethodInference(verifier: Verifier, program: Program,
 
   private def findRequiredKnowledge(kb: KnowledgeBase, impl: ImplTerm, target: PredFieldAccTerm, depth: Int): Option[Set[LogicTerm]] = {
     // TODO: the knowledge base could be expanded with the contained information
-    val direct: Seq[Option[Set[LogicTerm]]] = PredicateCollector.collectDirectPredicates(impl.cons, kb)
+    val direct: Seq[Option[Set[LogicTerm]]] = PredicateCollector.collectDirectPredicates(this.engine, impl.cons, kb)
       .filter(p => p.exp.equals(target.exp))
       .map(a => Some(Set[LogicTerm]()))
     val combined = if (depth > 0) {
-      val folded = PredicateCollector.collectFoldedPredicates(impl.cons, kb)
+      val folded = PredicateCollector.collectFoldedPredicates(this.engine, impl.cons, kb)
         .map(p => {
           val predDef = this.defs(p.pred.name)
           val body = predDef.instantiate(p.pred)
@@ -1719,7 +1632,7 @@ case class MethodInference(verifier: Verifier, program: Program,
           findRequiredKnowledge(kb, impl, target, depth - 1)
         })
 
-      val pot = PredicateCollector.collectPotSatImpls(impl.cons, kb)
+      val pot = PredicateCollector.collectPotSatImpls(this.engine, impl.cons, kb)
         .map(p => findRequiredKnowledge(kb, p, target, depth - 1))
 
       folded ++ pot
@@ -1754,7 +1667,8 @@ case class MethodInference(verifier: Verifier, program: Program,
       ContinueAdjustment(payload)
     }
     else {
-      val proofRes = this.knowledge(ident).proveDetailed(lp.toLT(payload))
+      val base = this.knowledge(ident)
+      val proofRes = this.engine.prove(base, lp.toLT(payload))
       if (proofRes == Sat) {
         // knowledge is already fulfilled at the current branch and should thus not be propagated further
         SuccessfulAdjustment[P]()
@@ -1937,7 +1851,7 @@ case class MethodInference(verifier: Verifier, program: Program,
 
     if (reqs.nonEmpty) {
       // TODO: joining like this would prevent something like: (A ==> REQ)  &  (!A ==> REQ)
-      val pure = reqs.map(r => PredicateCollector.stripToPure(r, kb))
+      val pure = reqs.map(r => PredicateCollector.stripToPure(this.engine, r, kb))
         .foldLeft(DNF(Set(Set())))((a, b) => a.and(b))
       propagatePureConstraints(current, pure)
     }
@@ -2113,9 +2027,10 @@ case class Inference(verifier: Verifier, defs: Map[String, PredDef], reps: Map[S
     order.foreach(f => {
       println(s"::::::::::: inferring ${f}")
       val injections = new mutable.HashMap[Injection, Seq[RefoldingStrategy]]()
+//      val engine = SimpleReasoningEngine()
+      val engine = ViperReasoningEngine(this.verifier, this.program)
       val mi = MethodInference(
-        this.verifier,
-        this.program,
+        engine,
         this.defs,
         this.reps,
         this.reps(f),
@@ -2162,9 +2077,93 @@ case class Inference(verifier: Verifier, defs: Map[String, PredDef], reps: Map[S
   }
 }
 
-// TODO: proof algorithm is too simple and does not support more sophisticated reasoning: y != null <==> null != y
+trait ReasoningEngine {
+  def prove(kb: KnowledgeBase, target: LogicTerm): ProofResult
+}
 
-object ViperProofChecker {
+case class SimpleReasoningEngine() extends ReasoningEngine {
+  override def prove(kb: KnowledgeBase, target: LogicTerm): ProofResult = {
+    kb.info.clauses.map(c => proveClause(c, target))
+      .foldLeft(Sat.asInstanceOf[ProofResult])(mergeProofResultsConj)
+  }
+
+  private def resultOfBool(value: Boolean): ProofResult = {
+    if (value) Sat
+    else UnSat
+  }
+
+  private def proveClause(cls: Set[Comparison], term: LogicTerm): ProofResult = {
+    term match {
+      case AndTerm(a, b) => {
+        val resA = proveClause(cls, a)
+        val resB = proveClause(cls, b)
+        mergeProofResultsConj(resA, resB)
+      }
+      case BoolTerm(value) => resultOfBool(value)
+      case c: Comparison => {
+        val isSat = cls.contains(c)
+        val isUn = cls.contains(c.negate())
+        if (isSat) Sat
+        else if (isUn) UnSat
+        else PotSat
+      }
+      case ImplTerm(prem, cons) => proveClause(cls, OrTerm(NotTerm(prem), cons))
+      case NotTerm(t) => {
+        val resT = proveClause(cls, t)
+        resT match {
+          case PotSat => PotSat
+          case Sat => UnSat
+          case UnSat => Sat
+          case _ => {
+            throw new IllegalArgumentException(s"Unable to negate proof result ${resT}")
+          }
+        }
+      }
+      case OrTerm(a, b) => {
+        val resA = proveClause(cls, a)
+        val resB = proveClause(cls, b)
+        mergeProofResultsDis(resA, resB)
+      }
+      case _ => {
+        throw new IllegalArgumentException(s"Unable to process term of type ${term.getClass.getCanonicalName} while proving")
+      }
+    }
+  }
+
+  private def mergeProofResultsDis(a: ProofResult, b: ProofResult): ProofResult = {
+    (a, b) match {
+      case (Sat, Sat) => Sat
+      case (Sat, UnSat) => Sat
+      case (UnSat, Sat) => Sat
+      case (UnSat, UnSat) => UnSat
+      case (Sat, PotSat) => Sat
+      case (PotSat, Sat) => Sat
+      case (PotSat, UnSat) => PotSat
+      case (UnSat, PotSat) => PotSat
+      case _ => {
+        throw new IllegalArgumentException(s"Unknown combination of proof results ${a} & ${b}")
+      }
+    }
+  }
+
+  private def mergeProofResultsConj(a: ProofResult, b: ProofResult): ProofResult = {
+    (a, b) match {
+      case (Sat, Sat) => Sat
+      case (Sat, UnSat) => UnSat
+      case (UnSat, Sat) => UnSat
+      case (UnSat, UnSat) => UnSat
+      case (Sat, PotSat) => PotSat
+      case (PotSat, Sat) => PotSat
+      case (PotSat, UnSat) => UnSat
+      case (UnSat, PotSat) => UnSat
+      case _ => {
+        throw new IllegalArgumentException(s"Unknown combination of proof results ${a} & ${b}")
+      }
+    }
+  }
+}
+
+case class ViperReasoningEngine(verifier: Verifier, program: Program) extends ReasoningEngine {
   private def joinAll[T](sets: Seq[Set[T]]): Set[T] = {
     sets.foldLeft(Set[T]())((a, b) => a.union(b))
   }
@@ -2223,12 +2222,12 @@ object ViperProofChecker {
     joinAll(combined)
   }
 
-  def proveWithPotential(verifier: Verifier, program: Program, kb: KnowledgeBase, target: LogicTerm): ProofResult = {
-    val resNormal = prove(verifier, program, kb, target)
+  def prove(kb: KnowledgeBase, target: LogicTerm): ProofResult = {
+    val resNormal = proveDirect(kb, target)
     resNormal match {
       case Sat => Sat
       case UnSat => {
-        val resNegated = prove(verifier, program, kb, NotTerm(target))
+        val resNegated = proveDirect(kb, NotTerm(target))
         resNegated match {
           case Sat => UnSat
           case UnSat => PotSat
@@ -2237,9 +2236,9 @@ object ViperProofChecker {
     }
   }
 
-  def prove(verifier: Verifier, program: Program, kb: KnowledgeBase, target: LogicTerm): ProofResult = {
+  def proveDirect(kb: KnowledgeBase, target: LogicTerm): ProofResult = {
     // generate mapping of field definitions to their corresponding type
-    val fieldTypes = program.fields.map(f => f.name -> f.typ).toMap
+    val fieldTypes = this.program.fields.map(f => f.name -> f.typ).toMap
 
     // get the variables used in all kinds of terms in the knowledge base
     val usedVars = getVariablesOfKnowledgeBase(fieldTypes, kb)
@@ -2340,18 +2339,16 @@ object ViperProofChecker {
     val methods = methodStubs ++ Seq(proofMethod)
 
     val proofProgram = Program(
-      program.domains,
-      program.fields,
-      program.functions,
-      program.predicates,
+      this.program.domains,
+      this.program.fields,
+      this.program.functions,
+      this.program.predicates,
       methods,
-      program.extensions,
+      this.program.extensions,
       new InferInfo()
     )()
 
-    verifier.start()
-    val result = verifier.verify(proofProgram)
-    verifier.stop()
+    val result = this.verifier.verify(proofProgram)
 
     println(s"VERIFICATION RESULT: ${result}")
 
