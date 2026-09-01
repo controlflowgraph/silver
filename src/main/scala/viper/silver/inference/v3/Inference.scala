@@ -1,12 +1,8 @@
 package viper.silver.inference.v3
 
-import viper.silver.ast.{
-  AbstractAssign, AbstractDomainFuncApp, AbstractLocalVar, AccessPredicate, And, AnySetBinExp, AnySetExp, AnySetUnExp, Apply, Applying, Assert, Asserting, Assume, BackendFuncApp, BinExp, BoolLit, CondExp, DatatypeType, DebugLabelledOld, Declaration, DomainBinExp, DomainFuncApp, DomainOpExp, DomainUnExp, EmptyMap, EmptyMultiset, EmptySeq, EmptySet, EqCmp, EqualityCmp, Exhale, Exists, Exp, ExplicitMap, ExplicitMultiset, ExplicitSeq, ExplicitSet, ExtensionStmt, Field, FieldAccess, FieldAccessPredicate, FieldAssign, Fold, ForPerm, Forall, FractionalPerm, FuncApp, FuncLikeApp, Function, Goto, If, InferInfo, Inhale, InhaleExhaleExp, Injection, IntLit, Label, LabelledOld, Let, Literal, LocalVar, LocalVarAssign, LocalVarDecl, LocalVarDeclStmt, LocalVarWithVersion, LocationAccess, MagicWand, MapCardinality, MapContains, MapDomain, MapExp, MapLookup, MapRange, MapUpdate, Maplet, Method, MethodCall, MultisetExp, NewStmt, Old, OldExp, Or, Package, PermExp, PredicateAccess, PredicateAccessPredicate, Program, QuantifiedExp, Quasihavoc, Quasihavocall, RangeSeq, Ref, Result, SeqAppend, SeqContains, SeqDrop, SeqExp, SeqIndex, SeqLength, SeqTake, SeqUpdate, Seqn, SetExp, Stmt, Type, UnExp, Unfold, Unfolding, While
-}
-import viper.silver.frontend.MinimalViperFrontendAPI
+import viper.silver.ast.{AbstractAssign, AbstractDomainFuncApp, AbstractLocalVar, AccessPredicate, And, AnySetBinExp, AnySetExp, AnySetUnExp, Apply, Applying, Assert, Asserting, Assume, BackendFuncApp, BinExp, BoolLit, CondExp, DatatypeType, DebugLabelledOld, DomainBinExp, DomainFuncApp, DomainOpExp, DomainUnExp, EmptyMap, EmptyMultiset, EmptySeq, EmptySet, EqualityCmp, Exhale, Exists, Exp, ExplicitMap, ExplicitMultiset, ExplicitSeq, ExplicitSet, ExtensionStmt, FieldAccess, FieldAccessPredicate, FieldAssign, Fold, ForPerm, Forall, FuncApp, FuncLikeApp, Function, Goto, If, InferInfo, Inhale, InhaleExhaleExp, Injection, Label, LabelledOld, Let, Literal, LocalVar, LocalVarAssign, LocalVarDecl, LocalVarDeclStmt, LocalVarWithVersion, LocationAccess, MagicWand, MapCardinality, MapContains, MapDomain, MapExp, MapLookup, MapRange, MapUpdate, Maplet, Method, MethodCall, MultisetExp, NewStmt, Old, OldExp, Or, Package, PermExp, PredicateAccess, PredicateAccessPredicate, Program, QuantifiedExp, Quasihavoc, Quasihavocall, RangeSeq, Ref, Result, SeqAppend, SeqContains, SeqDrop, SeqExp, SeqIndex, SeqLength, SeqTake, SeqUpdate, Seqn, SetExp, Stmt, Type, UnExp, Unfold, Unfolding, While}
 import viper.silver.inference.v3.ast._
-import viper.silver.verifier.errors.AssertFailed
-import viper.silver.verifier.{AbortedExceptionally, CliOptionError, ConsistencyError, DependencyNotFoundError, Failure, ParseReport, Success, TimeoutOccurred, TypecheckerError, TypecheckerWarning, VerificationError, VerificationResult, Verifier, VerifierWarning}
+import viper.silver.verifier.{Failure, Success, Verifier}
 
 import scala.annotation.tailrec
 import scala.collection.mutable
@@ -2327,14 +2323,7 @@ case class ViperReasoningEngine(verifier: Verifier, program: Program) extends Re
     println("PROOF SPEC:")
     println(body)
 
-    val proofMethod = Method(
-      "proof",
-      Seq(),
-      Seq(),
-      Seq(),
-      Seq(),
-      Some(body)
-    )()
+    val proofMethod = Method("proof", Seq(), Seq(), Seq(), Seq(), Some(body))()
 
     val methods = methodStubs ++ Seq(proofMethod)
 
