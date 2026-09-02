@@ -585,17 +585,25 @@ case class Potential(partial: Set[ImplTerm]) {
   }
 }
 
-case class KnowledgeBase(assignment: Assignment, heap: Heap, direct: DirectPermissionMask, folded: FoldedPermissionMask, info: DNF, partial: Potential) {
-  def update(fun: Assignment => Heap => DirectPermissionMask => FoldedPermissionMask => DNF => (Assignment, Heap, DirectPermissionMask, FoldedPermissionMask, DNF)): KnowledgeBase = {
+case class KnowledgeBase(assignment: Assignment, heap: Heap, direct: DirectPermissionMask, folded: FoldedPermissionMask, info: LogicTerm, partial: Potential, fieldTypes: Map[String, Type]) {
+  def withAssignment(a: Assignment): KnowledgeBase = {
+    KnowledgeBase(a, this.heap, this.direct, this.folded, this.info, this.partial, this.fieldTypes)
+  }
+
+  def withHeap(h: Heap): KnowledgeBase = {
+    KnowledgeBase(this.assignment, h, this.direct, this.folded, this.info, this.partial, this.fieldTypes)
+  }
+
+  def update(fun: Assignment => Heap => DirectPermissionMask => FoldedPermissionMask => LogicTerm => (Assignment, Heap, DirectPermissionMask, FoldedPermissionMask, LogicTerm)): KnowledgeBase = {
     update((a, h, d, f, i, p) => {
       val res = fun(a)(h)(d)(f)(i)
       (res._1, res._2, res._3, res._4, res._5, p)
     })
   }
 
-  def update(f: (Assignment, Heap, DirectPermissionMask, FoldedPermissionMask, DNF, Potential) => (Assignment, Heap, DirectPermissionMask, FoldedPermissionMask, DNF, Potential)): KnowledgeBase = {
+  def update(f: (Assignment, Heap, DirectPermissionMask, FoldedPermissionMask, LogicTerm, Potential) => (Assignment, Heap, DirectPermissionMask, FoldedPermissionMask, LogicTerm, Potential)): KnowledgeBase = {
     val res = f(this.assignment, this.heap, this.direct, this.folded, this.info, this.partial)
-    KnowledgeBase(res._1, res._2, res._3, res._4, res._5, res._6)
+    KnowledgeBase(res._1, res._2, res._3, res._4, res._5, res._6, this.fieldTypes)
   }
 
   def pretty(): String = {
@@ -612,11 +620,10 @@ case class KnowledgeBase(assignment: Assignment, heap: Heap, direct: DirectPermi
     val lowSimp = TermRewriter.simplify(amount)
     val highSimp = TermRewriter.simplify(higher)
     (lowSimp, highSimp) match {
-      case (PermFracTerm(IntTerm(a), IntTerm(b)), PermFracTerm(IntTerm(c), IntTerm(d))) => {
+      case (PermFracTerm(IntTerm(a), IntTerm(b)), PermFracTerm(IntTerm(c), IntTerm(d))) =>
         val fracA = a.doubleValue / b.doubleValue
         val fracB = c.doubleValue / d.doubleValue
         fracA <= fracB
-      }
       case _ => false
     }
   }
@@ -755,18 +762,6 @@ case class KnowledgeBase(assignment: Assignment, heap: Heap, direct: DirectPermi
 
       (a, h, ud, uf, ui)
     })
-  }
-
-
-  def substituteRef(ref: ValRef, fresh: ValRef): KnowledgeBase = {
-    KnowledgeBase(
-      this.assignment,
-      this.heap,
-      this.direct,
-      this.folded,
-      this.info,
-      this.partial
-    )
   }
 
   private def mergeRefoldingStrategyOptions(strats: Seq[Option[RefoldingStrategy]]): Option[RefoldingStrategy] = {
@@ -930,49 +925,34 @@ object PredicateCollector {
     }
   }
 
-  def stripToPure(engine: ReasoningEngine, term: LogicTerm, kb: KnowledgeBase): DNF = {
+  def stripToPure(engine: ReasoningEngine, term: LogicTerm, kb: KnowledgeBase): LogicTerm = {
     term match {
-      case BoolTerm(value) => {
-        if (value) DNF(Set(Set()))
-        else DNF(Set())
-      }
-      case v: EqCmpTerm => DNF(Set(Set(v)))
-      case v: GreaterCmpTerm => DNF(Set(Set(v)))
-      case v: GreaterEqCmpTerm => DNF(Set(Set(v)))
-      case v: LessCmpTerm => DNF(Set(Set(v)))
-      case v: LessEqCmpTerm => DNF(Set(Set(v)))
-      case v: NotEqCmpTerm => DNF(Set(Set(v)))
-      case AndTerm(a, b) => {
+      case v: BoolTerm => v
+      case v: EqCmpTerm => v
+      case v: GreaterCmpTerm => v
+      case v: GreaterEqCmpTerm => v
+      case v: LessCmpTerm => v
+      case v: LessEqCmpTerm => v
+      case v: NotEqCmpTerm => v
+      case AndTerm(a, b) =>
         val dnfA = stripToPure(engine, a, kb)
         val dnfB = stripToPure(engine, b, kb)
-        dnfA.and(dnfB)
-      }
+        AndTerm(dnfA, dnfB)
       case ImplTerm(prem, cons) => {
         if (engine.prove(kb, prem) == Sat) stripToPure(engine, cons, kb)
-        else DNF(Set(Set()))
+        else BoolTerm(true)
       }
-      case NotTerm(t) => {
-        /*
-        !((A & B & C) | (D & E & F))
-        (!(A & B & C)) & (!(D & E & F))
-        (!A | !B | !C) & (!D | !E | !F)
-        (!A & !D | !B & !D | !C & !D) | (!A & !E | !B & !E | !C & !E) | (!A & !F | !B & !F | !C & !F)
-
-        */
-        stripToPure(engine, t, kb).negate().prune()
-      }
-      case OrTerm(a, b) => {
+      case NotTerm(t) => NotTerm(stripToPure(engine, t, kb))
+      case OrTerm(a, b) =>
         // based on the assumption that viper does not support disjunctions with resource access stuff
         val dnfA = stripToPure(engine, a, kb)
         val dnfB = stripToPure(engine, b, kb)
-        dnfA.or(dnfB)
-      }
-      case _: PredFieldAccTerm => DNF(Set(Set()))
-      case _: PredInstAccTerm => DNF(Set(Set()))
-      case v: VarTerm => DNF(Set(Set(EqCmpTerm(v, BoolTerm(true)))))
-      case _ => {
+        OrTerm(dnfA, dnfB)
+      case _: PredFieldAccTerm => BoolTerm(true)
+      case _: PredInstAccTerm => BoolTerm(true)
+      case v: VarTerm => EqCmpTerm(v, BoolTerm(true))
+      case _ =>
         throw new IllegalArgumentException(s"Unable to extract folded predicates from logic term ${term.getClass.getCanonicalName}")
-      }
     }
   }
 
@@ -1127,173 +1107,6 @@ case class MethodInference(engine: ReasoningEngine,
     strats.foldLeft(before)((kb, s) => applyRefoldingStrategy(engine, inj, kb, s))
   }
 
-  // TODO: maybe simplify the value ref computation and return option val ref to signal that a primitive type is returned
-  private def computeValueRef(assignment: Assignment, heap: Heap, term: Term): (Assignment, Heap, ValRef) = {
-    term match {
-      case FieldAccTerm(src, field, typ) => {
-        val (a, h, r) = computeValueRef(assignment, heap, src)
-        val (hp, v) = h.lookupField(r, field)
-        (a, hp, v)
-      }
-      case AddTerm(left, right) => {
-        val (a1, h1, r1) = computeValueRef(assignment, heap, left)
-        val (a2, h2, r2) = computeValueRef(a1, h1, right)
-
-        val fresh = h2.rc.freshValRef()
-        // TODO: record the equivalent constraints to specify the equivalences and retain as much knowledge
-        // EqConst(AddRefs(r1, r2), fresh)
-
-        (a2, h2, fresh)
-      }
-      case IntTerm(value) => {
-        val fresh = heap.rc.freshValRef()
-
-        (assignment, heap, fresh)
-      }
-      case AndTerm(left, right) => {
-        val (a1, h1, r1) = computeValueRef(assignment, heap, left)
-        val (a2, h2, r2) = computeValueRef(a1, h1, right)
-
-        val fresh = h2.rc.freshValRef()
-        // TODO: record the equivalent constraints to specify the equivalences and retain as much knowledge
-        // EqConst(AndRefs(r1, r2), fresh)
-
-        (a2, h2, fresh)
-      }
-      case NegTerm(t) => {
-        val (a1, h1, r1) = computeValueRef(assignment, heap, t)
-
-        val fresh = heap.rc.freshValRef()
-
-        (a1, h1, fresh)
-      }
-      case NullTerm() => {
-        val fresh = heap.rc.freshValRef()
-
-        (assignment, heap, fresh)
-      }
-      case PermFracTerm(left, right) => {
-        val (a1, h1, r1) = computeValueRef(assignment, heap, left)
-        val (a2, h2, r2) = computeValueRef(a1, h1, right)
-
-        val fresh = h2.rc.freshValRef()
-        // TODO: record the equivalent constraints to specify the equivalences and retain as much knowledge
-        // EqConst(PermFracRefs(r1, r2), fresh)
-
-        (a2, h2, fresh)
-      }
-      case SubTerm(left, right) => {
-        val (a1, h1, r1) = computeValueRef(assignment, heap, left)
-        val (a2, h2, r2) = computeValueRef(a1, h1, right)
-
-        val fresh = h2.rc.freshValRef()
-        // TODO: record the equivalent constraints to specify the equivalences and retain as much knowledge
-        // EqConst(SubRefs(r1, r2), fresh)
-
-        (a2, h2, fresh)
-      }
-      case BoolTerm(value) => {
-        val fresh = heap.rc.freshValRef()
-
-        (assignment, heap, fresh)
-      }
-      case EqCmpTerm(left, right) => {
-        val (a1, h1, r1) = computeValueRef(assignment, heap, left)
-        val (a2, h2, r2) = computeValueRef(a1, h1, right)
-
-        val fresh = h2.rc.freshValRef()
-        // TODO: record the equivalent constraints to specify the equivalences and retain as much knowledge
-        // EqConst(AddRefs(r1, r2), fresh)
-
-        (a2, h2, fresh)
-      }
-      case GreaterCmpTerm(left, right) => {
-        val (a1, h1, r1) = computeValueRef(assignment, heap, left)
-        val (a2, h2, r2) = computeValueRef(a1, h1, right)
-
-        val fresh = h2.rc.freshValRef()
-        // TODO: record the equivalent constraints to specify the equivalences and retain as much knowledge
-        // EqConst(AddRefs(r1, r2), fresh)
-
-        (a2, h2, fresh)
-      }
-      case GreaterEqCmpTerm(left, right) => {
-        val (a1, h1, r1) = computeValueRef(assignment, heap, left)
-        val (a2, h2, r2) = computeValueRef(a1, h1, right)
-
-        val fresh = h2.rc.freshValRef()
-        // TODO: record the equivalent constraints to specify the equivalences and retain as much knowledge
-        // EqConst(AddRefs(r1, r2), fresh)
-
-        (a2, h2, fresh)
-      }
-      case LessCmpTerm(left, right) => {
-        val (a1, h1, r1) = computeValueRef(assignment, heap, left)
-        val (a2, h2, r2) = computeValueRef(a1, h1, right)
-
-        val fresh = h2.rc.freshValRef()
-        // TODO: record the equivalent constraints to specify the equivalences and retain as much knowledge
-        // EqConst(AddRefs(r1, r2), fresh)
-
-        (a2, h2, fresh)
-      }
-      case LessEqCmpTerm(left, right) => {
-        val (a1, h1, r1) = computeValueRef(assignment, heap, left)
-        val (a2, h2, r2) = computeValueRef(a1, h1, right)
-
-        val fresh = h2.rc.freshValRef()
-        // TODO: record the equivalent constraints to specify the equivalences and retain as much knowledge
-        // EqConst(AddRefs(r1, r2), fresh)
-
-        (a2, h2, fresh)
-      }
-      case NotEqCmpTerm(left, right) => {
-        val (a1, h1, r1) = computeValueRef(assignment, heap, left)
-        val (a2, h2, r2) = computeValueRef(a1, h1, right)
-
-        val fresh = h2.rc.freshValRef()
-        // TODO: record the equivalent constraints to specify the equivalences and retain as much knowledge
-        // EqConst(AddRefs(r1, r2), fresh)
-
-        (a2, h2, fresh)
-      }
-      case NotTerm(t) => {
-        val (a1, h1, r1) = computeValueRef(assignment, heap, t)
-
-        val fresh = heap.rc.freshValRef()
-
-        (a1, h1, fresh)
-      }
-      case OrTerm(left, right) => {
-        val (a1, h1, r1) = computeValueRef(assignment, heap, left)
-        val (a2, h2, r2) = computeValueRef(a1, h1, right)
-
-        val fresh = h2.rc.freshValRef()
-        // TODO: record the equivalent constraints to specify the equivalences and retain as much knowledge
-        // EqConst(AddRefs(r1, r2), fresh)
-
-        (a2, h2, fresh)
-      }
-      case VarTerm(name, typ) => {
-        val (a, r) = assignment.lookup(name, typ)
-        (a, heap, r)
-      }
-      case MulTerm(left, right) => {
-        val (a1, h1, r1) = computeValueRef(assignment, heap, left)
-        val (a2, h2, r2) = computeValueRef(a1, h1, right)
-
-        val fresh = h2.rc.freshValRef()
-        // TODO: record the equivalent constraints to specify the equivalences and retain as much knowledge
-        // EqConst(AddRefs(r1, r2), fresh)
-
-        (a2, h2, fresh)
-      }
-      case t => {
-        throw new IllegalArgumentException(s"Unable to compute value ref of type ${t.getClass.getCanonicalName}")
-      }
-    }
-  }
-
   private def propagateBackFieldPermReq(from: Ident, pred: PredFieldAccTerm, actual: Term): Boolean = {
     // TODO: fix the shortcut and actually propagate the requirements backward
     println(s"PROPAGATING BACK: ${pred.pretty()} has only ${actual.pretty()} from ${from}")
@@ -1335,6 +1148,11 @@ case class MethodInference(engine: ReasoningEngine,
           println(s"::::::::::::::::::::::::::::::::::::::")
         })
 
+        println(s"::::::::::::::::::::::::::::::::::::::")
+        println(s"CHECKING FOR STRIPPED: ${stripped.pretty()}")
+        this.engine.prove(before, stripped)
+        println(s"::::::::::::::::::::::::::::::::::::::")
+
 
         val afterUnfolding = direct.foldLeft(before)((kb, d) => {
           kb.findUnfoldingStrategy(this.engine, this.defs, d)
@@ -1360,6 +1178,7 @@ case class MethodInference(engine: ReasoningEngine,
       }
         //      case BranchLine(ln, pre, cond, thn, els) =>
       case CallLine(ln, inj, method, targets, args) => {
+        // TODO: include framing rule by checking if field access is retained
         val initial = this.reps(method)
         val spec = this.methSpec(method)
 
@@ -1439,27 +1258,26 @@ case class MethodInference(engine: ReasoningEngine,
           .foreach(p => propagateBackFieldPermReq(ln, p._1, p._2))
 
         val (a2, refBeforeAssign) = before.assignment.lookup(variable.name, variable.typ)
-        val (a3, h3, valRef) = computeValueRef(a2, before.heap, value)
-        val ua = a3.assign(variable.name, valRef, variable.typ)
+        val normKb = before.withAssignment(a2)
+        val (kbN, refN, typN, infoN) = TermNormalization.computeNormalizedValueRef(normKb, normKb.assignment.rc, value)
+        val ua = kbN.assignment.assign(variable.name, refN, variable.typ)
 
         val ts = MapTermSub(Map((variable, refBeforeAssign.toVarTerm(variable.typ))))
-        val subbedInfo = kb.info.substitute(ts).and(DNF(Set(Set(EqCmpTerm(variable, value)))))
+        val subbedInfo = kb.info.substitute(ts).asInstanceOf[LogicTerm].and(EqCmpTerm(variable, value))
         val resKb = KnowledgeBase(
           ua,
-          h3,
-          kb.direct.substitute(ts),
-          kb.folded.substitute(ts),
-          subbedInfo,
-          kb.partial.substitute(ts)
+          kbN.heap,
+          kbN.direct.substitute(ts),
+          kbN.folded.substitute(ts),
+          subbedInfo.and(infoN),
+          kbN.partial.substitute(ts),
+          kbN.fieldTypes
         )
         (false, resKb)
       }
       case FieldAssignLine(ln, inj, fa, value) => {
         clearInjection(inj)
 
-        // TODO: ensure that all requirements are satisfied/permissions are available(provable)
-        // TODO: if needed add unfolding statements for the permissions
-        // TODO: perform the substitution
         val reqs = collectRequiredFieldPermissions(fa.src)
         val self = Set(PredFieldAccTerm(fa, PermFracTerm(IntTerm(1), IntTerm(1))))
 
@@ -1510,22 +1328,21 @@ case class MethodInference(engine: ReasoningEngine,
                 (true, kb)
               }
               else {
-                val (a1, h1, valueRef) = computeValueRef(kb.assignment, kb.heap, value)
+                val (kbN, valueRef, typN, infoN) = TermNormalization.computeNormalizedValueRef(kb, kb.assignment.rc, value)
+                val (kbS, objRef, typS, infoS) = TermNormalization.computeNormalizedValueRef(kbN, kbN.assignment.rc, fa.src)
 
-                val (a3, h3, objRef) = computeValueRef(a1, h1, fa.src)
-                val (h4, fieldRef) = h3.lookupField(objRef, fa.field)
+                val (h4, fieldRef) = kbN.heap.lookupField(objRef, fa.field)
                 val h5 = h4.assignField(objRef, fa.field, valueRef)
                 // substitute the occurrences of this field usage with a temporary variable that refers to the val ref
-                // TODO: THIS CAUSES PROBLEMS WITH ALIASED PERMISSIONS (e.g. in the make methods)
-                //       INTRODUCE RENAMING SUBSTITUTIONS TO PREVENT THIS STUFF
                 val ts = MapTermSub(Map((fa, VarTerm(s"t$$${fieldRef.id}", fa.typ))))
                 val resKb = KnowledgeBase(
-                  a3,
+                  kbS.assignment,
                   h5,
                   kb.direct.substitute(ts),
                   kb.folded.substitute(ts),
-                  kb.info.substitute(ts),
-                  kb.partial.substitute(ts)
+                  kb.info.substitute(ts).asInstanceOf[LogicTerm].and(infoN).and(infoS),
+                  kb.partial.substitute(ts),
+                  kb.fieldTypes
                 )
 
                 (false, resKb)
@@ -1561,7 +1378,7 @@ case class MethodInference(engine: ReasoningEngine,
         val ua = a2.assign(target.name, valRef, target.typ)
 
         val afterAssign = KnowledgeBase(
-          ua, before.heap, before.direct, before.folded, before.info, before.partial
+          ua, before.heap, before.direct, before.folded, before.info, before.partial, before.fieldTypes
         )
 
         // substitute the old variable and inhale the new permissions
@@ -1573,7 +1390,7 @@ case class MethodInference(engine: ReasoningEngine,
               m.inhale(PredFieldAccTerm(fa, PermAmount.WRITE))
             })
             val fol = f.substitute(ts)
-            val info = i.substitute(ts).and(DNF(Set(Set(NotEqCmpTerm(target, NullTerm())))))
+            val info = i.substitute(ts).asInstanceOf[LogicTerm].and(NotEqCmpTerm(target, NullTerm()))
             (a, h, dir, fol, info)
           }
         )
@@ -1813,29 +1630,31 @@ case class MethodInference(engine: ReasoningEngine,
     }
   }
 
-  private def propagatePureConstraints(ident: Ident, pure: DNF): Boolean = {
-    if (pure.clauses.size != 1) {
-      throw new IllegalArgumentException(s"Expected single conjunction but got disjunction of pure terms! ${pure.toLogicTerm().pretty()}")
-    }
+  private def propagatePureConstraints(ident: Ident, pure: LogicTerm): Boolean = {
+//    if (pure.clauses.size != 1) {
+//      throw new IllegalArgumentException(s"Expected single conjunction but got disjunction of pure terms! ${pure.toLogicTerm().pretty()}")
+//    }
 
     val preds = this.currentMethod.rep.getPredecessors(ident)
-    println(s"ADDITIONAL REQUIREMENTS THAT NEED TO BE PROPAGATED!: ${pure.prune().pretty()}")
-    if (preds.size == 1) {
-      val pred = preds.head
-      pure.clauses.head.map(p => {
-          val (lp, pay) = getLinePropagator(p)
-          val response = propagatePureConstraintThrough(pred, this.currentMethod.start, lp, pay)
-          response match {
-            case _: SuccessfulAdjustment[Term] => println(s"Successfully propagated constraint ${p}!")
-            case _ => println("Unable to propagate constraint!")
-          }
-          response
-        })
-        .exists(a => a.isInstanceOf[SuccessfulAdjustment[Term]])
-    }
-    else {
-      throw new IllegalArgumentException(s"Expected single predecessor of line got: ${preds.size}")
-    }
+    println(s"ADDITIONAL REQUIREMENTS THAT NEED TO BE PROPAGATED!: ${pure.pretty()}")
+    // TODO: think about a better propagation strategy. or just convert the existing information in the
+    true
+//    if (preds.size == 1) {
+//      val pred = preds.head
+//      pure.clauses.head.map(p => {
+//          val (lp, pay) = getLinePropagator(p)
+//          val response = propagatePureConstraintThrough(pred, this.currentMethod.start, lp, pay)
+//          response match {
+//            case _: SuccessfulAdjustment[Term] => println(s"Successfully propagated constraint ${p}!")
+//            case _ => println("Unable to propagate constraint!")
+//          }
+//          response
+//        })
+//        .exists(a => a.isInstanceOf[SuccessfulAdjustment[Term]])
+//    }
+//    else {
+//      throw new IllegalArgumentException(s"Expected single predecessor of line got: ${preds.size}")
+//    }
   }
 
   private def findIfPotHasSolution(current: Ident, kb: KnowledgeBase, target: PredFieldAccTerm, amount: Term): Boolean = {
@@ -1848,7 +1667,8 @@ case class MethodInference(engine: ReasoningEngine,
     if (reqs.nonEmpty) {
       // TODO: joining like this would prevent something like: (A ==> REQ)  &  (!A ==> REQ)
       val pure = reqs.map(r => PredicateCollector.stripToPure(this.engine, r, kb))
-        .foldLeft(DNF(Set(Set())))((a, b) => a.and(b))
+        .reduceLeftOption((a, b) => a.and(b))
+        .getOrElse(BoolTerm(true))
       propagatePureConstraints(current, pure)
     }
     else {
@@ -1856,7 +1676,10 @@ case class MethodInference(engine: ReasoningEngine,
     }
   }
 
-  def infer(meth: InternalMethod) = {
+  def infer(program: Program, meth: InternalMethod) = {
+    // generate mapping of field definitions to their corresponding type
+    val fieldTypes = program.fields.map(f => f.name -> f.typ).toMap
+
     this.knowledge.clear()
     val counter = RefCounter(Counter(0))
 
@@ -1869,7 +1692,7 @@ case class MethodInference(engine: ReasoningEngine,
 
       // generate an initial assignment based of the arguments of the method
       val initAssignment = meth.args.foldLeft(new Assignment(counter))((a, f) => a.assign(f._1, counter.freshValRef(), f._2))
-      val empty = KnowledgeBase(initAssignment, new Heap(counter), new DirectPermissionMask(), new FoldedPermissionMask(), DNF(Set(Set())), new Potential())
+      val empty = KnowledgeBase(initAssignment, new Heap(counter), new DirectPermissionMask(), new FoldedPermissionMask(), BoolTerm(true), new Potential(), fieldTypes)
 
       // inhale the preconditions
       // TODO: fix the restart position
@@ -2035,7 +1858,7 @@ case class Inference(verifier: Verifier, defs: Map[String, PredDef], reps: Map[S
         injections
       )
       val beforeSpec = this.methSpec(f)
-      mi.infer(this.reps(f))
+      mi.infer(this.program, this.reps(f))
       println("::::::::::::::::::::: ADD. SPEC. BEFORE INFERENCE :::::::::::::::::")
       printSpec(beforeSpec)
       println("::::::::::::::::::::: ADD. SPEC. AFTER INFERENCE :::::::::::::::::")
@@ -2068,95 +1891,81 @@ case class Inference(verifier: Verifier, defs: Map[String, PredDef], reps: Map[S
       println(s"==== ${e._1} ====")
       printSpec(e._2)
     })
-
-
   }
 }
 
+object TermNormalization {
+
+  private def computeNormalizedBinaryOperator(kb: KnowledgeBase, counter: RefCounter, resType: Type, left: Term, right: Term, op: (Term, Term) => Term): (KnowledgeBase, ValRef, Type, LogicTerm) = {
+    val (kbA, refA, typA, infoA) = computeNormalizedValueRef(kb, counter, left)
+    val (kbB, refB, typB, infoB) = computeNormalizedValueRef(kbA, counter, right)
+    val ref = counter.freshValRef()
+    val valRefVar = ref.toVarTerm(resType)
+    val valRefVarA = refA.toVarTerm(typA)
+    val valRefVarB = refB.toVarTerm(typB)
+    (kbB, ref, resType, infoA.and(infoB).and(EqCmpTerm(valRefVar, op(valRefVarA, valRefVarB))))
+  }
+
+  private def computeNormalizedLiteral(kb: KnowledgeBase, counter: RefCounter, resType: Type, lit: Term): (KnowledgeBase, ValRef, Type, LogicTerm) = {
+    val ref = counter.freshValRef()
+    val valRefVar = ref.toVarTerm(resType)
+    (kb, ref, resType, EqCmpTerm(valRefVar, lit))
+  }
+
+  private def computeNormalizedUnaryOperator(kb: KnowledgeBase, counter: RefCounter, resType: Type, sub: Term, op: Term => Term): (KnowledgeBase, ValRef, Type, LogicTerm) = {
+    val (kbS, refS, typS, infoS) = computeNormalizedValueRef(kb, counter, sub)
+    val ref = counter.freshValRef()
+    val valRefVar = ref.toVarTerm(resType)
+    val valRefVarSub = refS.toVarTerm(typS)
+    (kbS, ref , resType, infoS.and(EqCmpTerm(valRefVar, op(valRefVarSub))))
+  }
+
+  def computeNormalizedValueRef(kb: KnowledgeBase, counter: RefCounter, term: Term): (KnowledgeBase, ValRef, Type, LogicTerm) = {
+    term match {
+      case FieldAccTerm(src, field, typ) => {
+        val (kbS, refS, typS, infoS) = computeNormalizedValueRef(kb, counter, src)
+        val (h, ref) = kbS.heap.lookupField(refS, field)
+        val resKb = kbS.withHeap(h)
+        (resKb, ref, kb.fieldTypes(field), infoS)
+      }
+      case AddTerm(a, b) => computeNormalizedBinaryOperator(kb, counter, viper.silver.ast.Int, a, b, AddTerm)
+      case AndTerm(a, b) => computeNormalizedBinaryOperator(kb, counter, viper.silver.ast.Bool, a, b, (a, b) => AndTerm(a.asInstanceOf[LogicTerm], b.asInstanceOf[LogicTerm]))
+      case lit: IntTerm => computeNormalizedLiteral(kb, counter, viper.silver.ast.Int, lit)
+      case lit: BoolTerm => computeNormalizedLiteral(kb, counter, viper.silver.ast.Bool, lit)
+      case EqCmpTerm(a, b) => computeNormalizedBinaryOperator(kb, counter, viper.silver.ast.Bool, a, b, EqCmpTerm)
+      case GreaterCmpTerm(a, b) => computeNormalizedBinaryOperator(kb, counter, viper.silver.ast.Bool, a, b, GreaterCmpTerm)
+      case GreaterEqCmpTerm(a, b) => computeNormalizedBinaryOperator(kb, counter, viper.silver.ast.Bool, a, b, GreaterEqCmpTerm)
+      case LessCmpTerm(a, b) => computeNormalizedBinaryOperator(kb, counter, viper.silver.ast.Bool, a, b, LessCmpTerm)
+      case LessEqCmpTerm(a, b) => computeNormalizedBinaryOperator(kb, counter, viper.silver.ast.Bool, a, b, LessEqCmpTerm)
+      case NotEqCmpTerm(a, b) => computeNormalizedBinaryOperator(kb, counter, viper.silver.ast.Bool, a, b, NotEqCmpTerm)
+      case NotTerm(t) => computeNormalizedUnaryOperator(kb, counter, viper.silver.ast.Bool, t, (v) => NotTerm(v.asInstanceOf[LogicTerm]))
+      case OrTerm(a, b) => computeNormalizedBinaryOperator(kb, counter, viper.silver.ast.Bool, a, b, (a, b) => OrTerm(a.asInstanceOf[LogicTerm], b.asInstanceOf[LogicTerm]))
+      case VarTerm(name, typ) => {
+        val lookupResult = kb.assignment.lookup(name, typ)
+        val valRef = lookupResult._2
+        val ukb = kb.withAssignment(lookupResult._1)
+        (ukb, valRef, typ, BoolTerm(true))
+      }
+      case MulTerm(a, b) => computeNormalizedBinaryOperator(kb, counter, viper.silver.ast.Int, a, b, MulTerm)
+      case NegTerm(t) => computeNormalizedUnaryOperator(kb, counter, viper.silver.ast.Int, t, NegTerm)
+      case lit: NullTerm => computeNormalizedLiteral(kb, counter, viper.silver.ast.Ref, lit)
+      // TODO: the ADD etc are overloaded with respect to their type so it needs to be checked which res type actually is taken
+      //       perm + int => ERROR
+      //       perm * int => perm
+      //       int * int => int
+      //       -perm => perm
+      //       !bool => bool
+      //       ...
+  //    case PermFracTerm(a, b) => // TODO: special logic
+      case SubTerm(a, b) => computeNormalizedBinaryOperator(kb, counter, viper.silver.ast.Int, a, b, SubTerm)
+      case c => {
+        throw new IllegalArgumentException(s"Unable to compute normalized form for term of type ${c.getClass.getCanonicalName}")
+      }
+    }
+  }
+}
 trait ReasoningEngine {
   def prove(kb: KnowledgeBase, target: LogicTerm): ProofResult
-}
-
-case class SimpleReasoningEngine() extends ReasoningEngine {
-  override def prove(kb: KnowledgeBase, target: LogicTerm): ProofResult = {
-    kb.info.clauses.map(c => proveClause(c, target))
-      .foldLeft(Sat.asInstanceOf[ProofResult])(mergeProofResultsConj)
-  }
-
-  private def resultOfBool(value: Boolean): ProofResult = {
-    if (value) Sat
-    else UnSat
-  }
-
-  private def proveClause(cls: Set[Comparison], term: LogicTerm): ProofResult = {
-    term match {
-      case AndTerm(a, b) => {
-        val resA = proveClause(cls, a)
-        val resB = proveClause(cls, b)
-        mergeProofResultsConj(resA, resB)
-      }
-      case BoolTerm(value) => resultOfBool(value)
-      case c: Comparison => {
-        val isSat = cls.contains(c)
-        val isUn = cls.contains(c.negate())
-        if (isSat) Sat
-        else if (isUn) UnSat
-        else PotSat
-      }
-      case ImplTerm(prem, cons) => proveClause(cls, OrTerm(NotTerm(prem), cons))
-      case NotTerm(t) => {
-        val resT = proveClause(cls, t)
-        resT match {
-          case PotSat => PotSat
-          case Sat => UnSat
-          case UnSat => Sat
-          case _ => {
-            throw new IllegalArgumentException(s"Unable to negate proof result ${resT}")
-          }
-        }
-      }
-      case OrTerm(a, b) => {
-        val resA = proveClause(cls, a)
-        val resB = proveClause(cls, b)
-        mergeProofResultsDis(resA, resB)
-      }
-      case _ => {
-        throw new IllegalArgumentException(s"Unable to process term of type ${term.getClass.getCanonicalName} while proving")
-      }
-    }
-  }
-
-  private def mergeProofResultsDis(a: ProofResult, b: ProofResult): ProofResult = {
-    (a, b) match {
-      case (Sat, Sat) => Sat
-      case (Sat, UnSat) => Sat
-      case (UnSat, Sat) => Sat
-      case (UnSat, UnSat) => UnSat
-      case (Sat, PotSat) => Sat
-      case (PotSat, Sat) => Sat
-      case (PotSat, UnSat) => PotSat
-      case (UnSat, PotSat) => PotSat
-      case _ => {
-        throw new IllegalArgumentException(s"Unknown combination of proof results ${a} & ${b}")
-      }
-    }
-  }
-
-  private def mergeProofResultsConj(a: ProofResult, b: ProofResult): ProofResult = {
-    (a, b) match {
-      case (Sat, Sat) => Sat
-      case (Sat, UnSat) => UnSat
-      case (UnSat, Sat) => UnSat
-      case (UnSat, UnSat) => UnSat
-      case (Sat, PotSat) => PotSat
-      case (PotSat, Sat) => PotSat
-      case (PotSat, UnSat) => UnSat
-      case (UnSat, PotSat) => UnSat
-      case _ => {
-        throw new IllegalArgumentException(s"Unknown combination of proof results ${a} & ${b}")
-      }
-    }
-  }
 }
 
 case class ViperReasoningEngine(verifier: Verifier, program: Program) extends ReasoningEngine {
@@ -2212,7 +2021,7 @@ case class ViperReasoningEngine(verifier: Verifier, program: Program) extends Re
     val fromDirect = kb.direct.permissions.map(a => getVariablesFromTerms(Seq(a._1, a._2)))
     val fromFolded = kb.folded.permissions.map(f => getVariablesFromTerms(f._1.args ++ Seq(f._2)))
     val fromPartial = getVariablesFromTerms(kb.partial.partial.toSeq)
-    val fromInfo = joinAll(kb.info.clauses.map(c => getVariablesFromTerms(c.map(v => v.toLogicTerm()).toSeq)).toSeq)
+    val fromInfo = getVariablesFromTerm(kb.info)
 
     val combined = Seq(fromAssignment, fromAssignmentValRefs, fromHeap, fromHeapFields, fromPartial, fromInfo) ++ fromDirect ++ fromFolded
     joinAll(combined)
@@ -2233,11 +2042,8 @@ case class ViperReasoningEngine(verifier: Verifier, program: Program) extends Re
   }
 
   def proveDirect(kb: KnowledgeBase, target: LogicTerm): ProofResult = {
-    // generate mapping of field definitions to their corresponding type
-    val fieldTypes = this.program.fields.map(f => f.name -> f.typ).toMap
-
     // get the variables used in all kinds of terms in the knowledge base
-    val usedVars = getVariablesOfKnowledgeBase(fieldTypes, kb)
+    val usedVars = getVariablesOfKnowledgeBase(kb.fieldTypes, kb)
     val decls = usedVars.map(e => LocalVarDecl(e.name, e.typ)()).toSeq
 
 
@@ -2265,13 +2071,7 @@ case class ViperReasoningEngine(verifier: Verifier, program: Program) extends Re
     }).toSeq
 
     // inhale the pure information
-    val infoInhales = Inhale(kb.info.clauses.map(
-        c => c.map(a => a.toLogicTerm().toExp())
-          .reduceLeftOption((a, b) => And(a, b)())
-          .getOrElse(BoolLit(b = true)())
-      )
-      .reduceLeftOption((a, b) => Or(a, b)())
-      .getOrElse(BoolLit(b = false)()))()
+    val infoInhales = Inhale(kb.info.toExp())()
 
     // generate equivalence information within the assignment
     val equivInfoFromAssignment = kb.assignment.variables.map(v => {
@@ -2287,7 +2087,7 @@ case class ViperReasoningEngine(verifier: Verifier, program: Program) extends Re
     val equivInfoFromHeap = kb.heap.objMap.flatMap(v => {
         val obj = v._1.toVarTerm(Ref)
         v._2.fields.map(f => {
-          val typ = fieldTypes(f._1)
+          val typ = kb.fieldTypes(f._1)
           val field = FieldAccTerm(obj, f._1, typ)
           val res = f._2.toVarTerm(typ)
           EqCmpTerm(field, res)

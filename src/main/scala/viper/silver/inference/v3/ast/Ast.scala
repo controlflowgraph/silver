@@ -179,7 +179,13 @@ case class FieldAccTerm(src: Term, field: String, typ: Type) extends Term {
 }
 
 trait LogicTerm extends Term {
+  def and(other: LogicTerm): LogicTerm = {
+    AndTerm(this, other)
+  }
 
+  def or(other: LogicTerm): LogicTerm = {
+    OrTerm(this, other)
+  }
 }
 
 case class BoolTerm(value: Boolean) extends LogicTerm {
