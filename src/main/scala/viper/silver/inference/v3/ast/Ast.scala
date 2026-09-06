@@ -1,6 +1,6 @@
 package viper.silver.inference.v3.ast
 
-import viper.silver.ast.{Add, And, BoolLit, EqCmp, Exp, Field, FieldAccess, FieldAccessPredicate, FractionalPerm, GeCmp, GtCmp, Implies, IntLit, LeCmp, LocalVar, LtCmp, Minus, Mul, NeCmp, Not, NullLit, Or, PredicateAccess, PredicateAccessPredicate, Sub, Type}
+import viper.silver.ast.{Add, And, BoolLit, EqCmp, Exp, Field, FieldAccess, FieldAccessPredicate, FractionalPerm, GeCmp, GtCmp, Implies, IntLit, LeCmp, LocalVar, LtCmp, Minus, Mul, NeCmp, Not, NullLit, Or, PermAdd, PredicateAccess, PredicateAccessPredicate, Sub, Type}
 import viper.silver.inference.v3.FixedPoint
 
 trait TermSub {
@@ -114,10 +114,16 @@ case class AddTerm(a: Term, b: Term) extends Term {
     s"${this.a.pretty()} + ${this.b.pretty()}"
   }
 
-  override def toExp(): Exp = Add(
-    this.a.toExp(),
-    this.b.toExp()
-  )()
+  override def toExp(): Exp = {
+    val leftExp = this.a.toExp()
+    val rightExp = this.b.toExp()
+    if(leftExp.typ == viper.silver.ast.Perm) {
+      PermAdd(leftExp, rightExp)()
+    }
+    else {
+      Add(leftExp, rightExp)()
+    }
+  }
 }
 
 case class MulTerm(a: Term, b: Term) extends Term {
@@ -517,6 +523,20 @@ object TermRewriter
     }
   )
 
+  private def addZeroLeftSimp: Seq[TermSub] = Seq(
+    FuncTermSub {
+      case AddTerm(PermFracTerm(IntTerm(a), _), d) if a == BigInt.int2bigInt(0) => d
+      case c => c
+    }
+  )
+
+  private def addZeroRightSimp: Seq[TermSub] = Seq(
+    FuncTermSub {
+      case AddTerm(d, PermFracTerm(IntTerm(a), _)) if a == BigInt.int2bigInt(0) => d
+      case c => c
+    }
+  )
+
   private def constMulSimp: Seq[TermSub] = Seq(
     FuncTermSub {
       case MulTerm(PermFracTerm(IntTerm(a), IntTerm(b)), PermFracTerm(IntTerm(c), IntTerm(d))) => PermFracTerm(
@@ -554,6 +574,8 @@ object TermRewriter
   def simplify(t: Term): Term = {
 
     val subs = Seq(
+      addZeroLeftSimp,
+      addZeroRightSimp,
       constAddSimp,
       constMulSimp,
       constSubSimp,
