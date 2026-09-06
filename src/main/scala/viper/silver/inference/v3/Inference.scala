@@ -367,24 +367,25 @@ case class Obj(ref: ValRef, fields: Map[String, ValRef]) {
   }
 }
 
-case class Heap(rc: RefCounter, objMap: Map[ValRef, Obj]) {
+case class Heap(rc: RefCounter, initialized: (Set[ValRef], Set[(ValRef, String, ValRef)]), objMap: Map[ValRef, Obj]) {
 
   def this(rc: RefCounter) = {
-    this(rc, Map())
+    this(rc, (Set(), Set()), Map())
   }
 
-  def lookup(ref: ValRef): (Heap, Obj) = {
+  private def lookup(ref: ValRef): (Heap, Obj) = {
     if (this.objMap.contains(ref)) {
       (this, this.objMap(ref))
     }
     else {
       val fresh = Obj(ref, Map())
-      (Heap(this.rc, this.objMap.updated(ref, fresh)), fresh)
+      val ui = (this.initialized._1.union(Set(ref)), this.initialized._2)
+      (Heap(this.rc, ui, this.objMap.updated(ref, fresh)), fresh)
     }
   }
 
   def pretty(): String = {
-    this.objMap.values.map(o => s"${o.ref.pretty()}:\n${o.fields.map(e => s"${e._1}: ${e._2.pretty()}").mkString("\n").indent(2)}".indent(2)).mkString("\n")
+    s"${this.initialized}" + this.objMap.values.map(o => s"${o.ref.pretty()}:\n${o.fields.map(e => s"${e._1}: ${e._2.pretty()}").mkString("\n").indent(2)}".indent(2)).mkString("\n")
   }
 
   def lookupField(r: ValRef, field: String): (Heap, ValRef) = {
@@ -393,14 +394,17 @@ case class Heap(rc: RefCounter, objMap: Map[ValRef, Obj]) {
       (h, o.fields(field))
     }
     else {
-      val fresh = this.rc.freshValRef()
+      val fresh = h.rc.freshValRef()
       val uo = o.assign(field, fresh)
-      (Heap(this.rc, this.objMap.updated(r, uo)), fresh)
+      val initExtended = if (h.initialized._1.contains(r)) {
+        (h.initialized._1.union(Set(fresh)), h.initialized._2.union(Set((r, field, fresh))))
+      } else h.initialized
+      (Heap(h.rc, initExtended, h.objMap.updated(r, uo)), fresh)
     }
   }
 
   def assignField(r: ValRef, field: String, v: ValRef): Heap = {
-    Heap(this.rc, this.objMap.updated(r, this.objMap(r).assign(field, v)))
+    Heap(this.rc, this.initialized, this.objMap.updated(r, this.objMap(r).assign(field, v)))
   }
 }
 
@@ -589,16 +593,70 @@ case class Potential(partial: Set[ImplTerm]) {
 
 case class KnowledgeBase(assignment: Assignment, heap: Heap, direct: DirectPermissionMask, folded: FoldedPermissionMask, info: LogicTerm, partial: Potential, fieldTypes: Map[String, Type]) {
 
-  def constructBackMapping(): Unit = {
+  def constructInitialBackMapping(meth: InternalMethod, useAllVariables: Boolean): TermSub = {
+    val args: Set[String] = if (!useAllVariables) {
+      meth.args.map(_._1).toSet
+    } else Set()
     val mapping: mutable.HashMap[Term, Term] = new mutable.HashMap()
-    this.assignment.variables.foreach(v => {
-      val source = VarTerm(v._1, v._2._2)
-      val value = v._2._1.toVarTerm(v._2._2)
-      mapping.put(value, source)
-    })
+    this.assignment.variables
+      .filter(v => useAllVariables || args.contains(v._1))
+      .foreach(v => {
+        val source = VarTerm(v._1, v._2._2)
+        val value = v._2._1.toVarTerm(v._2._2)
+        mapping.put(value, source)
+      })
 
 
     var open: Set[ValRef] = this.assignment.variables
+      .filter(v => useAllVariables || args.contains(v._1))
+      .filter(v => v._2._2 == Ref)
+      .map(v => v._2._1)
+      .toSet
+
+    while (open.nonEmpty) {
+      val current = open.head
+      if (this.heap.initialized._1.contains(current)) {
+        println(s"CURRENT: ${current}")
+        println(s"MAPPING:")
+        println(mapping.toSeq.map(e => e._1.pretty() + " ==> " + e._2.pretty()).mkString("\n"))
+        println("- sm")
+        val source = mapping(current.toVarTerm(Ref))
+        val connections = this.heap.initialized._2.filter(v => v._1 == current)
+        connections.foreach(c => {
+          val resTyp = this.fieldTypes(c._2)
+          val tmp = c._3.toVarTerm(resTyp)
+          mapping.put(tmp, FieldAccTerm(source, c._2, resTyp))
+        })
+
+        // only add the values of ref fields as potential next steps
+        val additional = connections
+          .filter(c => this.fieldTypes(c._2) == Ref)
+          .map(_._3)
+
+        open = open.union(additional)
+      }
+      open = open.diff(Set(current))
+    }
+
+    MapTermSub(mapping.toMap)
+  }
+
+  def constructBackMapping(meth: InternalMethod, useAllVariables: Boolean): TermSub = {
+    val args: Set[String] = if (!useAllVariables) {
+      meth.args.map(_._1).toSet
+    } else Set()
+    val mapping: mutable.HashMap[Term, Term] = new mutable.HashMap()
+    this.assignment.variables
+      .filter(v => useAllVariables || args.contains(v._1))
+      .foreach(v => {
+        val source = VarTerm(v._1, v._2._2)
+        val value = v._2._1.toVarTerm(v._2._2)
+        mapping.put(value, source)
+      })
+
+
+    var open: Set[ValRef] = this.assignment.variables
+      .filter(v => useAllVariables || args.contains(v._1))
       .filter(v => v._2._2 == Ref)
       .map(v => v._2._1)
       .toSet
@@ -607,7 +665,7 @@ case class KnowledgeBase(assignment: Assignment, heap: Heap, direct: DirectPermi
       val current = open.head
       val source = mapping(current.toVarTerm(Ref))
 
-      if(this.heap.objMap.contains(current)){
+      if (this.heap.objMap.contains(current)) {
 
         val obj = this.heap.objMap(current)
         val additional = obj.fields
@@ -634,6 +692,7 @@ case class KnowledgeBase(assignment: Assignment, heap: Heap, direct: DirectPermi
     }
 
     mapping.foreach(e => println(s"${e._1.pretty()} ==> ${e._2.pretty()}"))
+    MapTermSub(mapping.toMap)
   }
 
   def withAssignment(a: Assignment): KnowledgeBase = {
@@ -1952,27 +2011,74 @@ case class MethodInference(engine: ReasoningEngine,
         open = open.tail ++ mesh(current).toSeq
 
 
-        if(restarting){
+        if (restarting) {
           throw new IllegalArgumentException(s"RESTARTING :/ ${line.pretty()}")
         }
       }
 
-      if(!restarting){
+      if (!restarting) {
         val mergedPosts = meth.posts ++ this.methSpec(this.currentMethod.method)._2
 
         val finInj = this.currentMethod.finalInj
         val finalKb = this.knowledge(meth.stop)
+
+        val startKb = this.knowledge(meth.start)
+        on(engine, startKb, finalKb, meth)
+
         val afterPosts = mergedPosts.foldLeft(finalKb)((kb, p) => processLine(kb, ExhaleLine(meth.stop, finInj, p))._2)
         println("----------------------------------------------------------")
         println(afterPosts.pretty())
         println("BACK MAPPING")
-        afterPosts.constructBackMapping()
         println("----------------------------------------------------------")
+        // TODO: WTF IS THIS
         this.knowledge.put(meth.start, afterPosts)
+        // TODO: extend the post conditions with the information that are left over
       }
     }
+  }
 
-    // TODO: exhale post conditions
+  private def on1(engine: ReasoningEngine, kb: KnowledgeBase, objRef: ValRef, ibm: TermSub, bm: TermSub): Unit = {
+    if (kb.heap.objMap.contains(objRef)) {
+      val obj = kb.heap.objMap(objRef)
+      val source = objRef.toVarTerm(Ref)
+//      println(s"${objRef.pretty()}: ${source.substitute(bm).pretty()}  ==  old(${source.substitute(ibm).pretty()})")
+      obj.fields.foreach(f => {
+        // TODO: this can be adjusted to only check for > 0 permissions and not a specific amount
+        val desired = PermAmount.READ
+        val access = FieldAccTerm(source, f._1, kb.fieldTypes(f._1))
+        val pred = PredFieldAccTerm(access, desired)
+        if (engine.prove(kb, pred) == Sat) {
+          val value = f._2.toVarTerm(kb.fieldTypes(f._1))
+          println(s"${access.substitute(ibm).pretty()}  := old(${value.substitute(ibm).pretty()})")
+        }
+      })
+    }
+  }
+
+  private def on(engine: ReasoningEngine, start: KnowledgeBase, kb: KnowledgeBase, meth: InternalMethod): Unit = {
+    val args = Some()
+    // applying the back mapping like this assumes that the contents of the parameter arguments can not be altered
+    val backmapping = kb.constructBackMapping(meth, useAllVariables = false)
+    val initialBackmapping = kb.constructInitialBackMapping(meth, useAllVariables = false)
+    println("CHECKING THE STATE AFTER:")
+    println(s"IBM: ${initialBackmapping}")
+    println(s"BM: ${backmapping}")
+    kb.heap.objMap.foreach(e => {
+      on1(engine, kb, e._1, initialBackmapping, backmapping)
+    })
+    //    println("CHECKING WHAT THE ARGS ARE ABOUT:")
+    //    meth.args.foreach(a => {
+    //      val value = kb.assignment.variables(a._1)
+    //      val backmapped = value._1.toVarTerm(value._2).substitute(backmapping)
+    //      println(s"${value._1.pretty()}   => ${backmapped.pretty()}")
+    //      val obj = kb.heap.objMap(value._1)
+    //      println("CHECKING THE FIELDS OF THE OBJECT:")
+    //      obj.fields.foreach(f => {
+    //        val res = f._2.toVarTerm(kb.fieldTypes(f._1)).substitute(backmapping)
+    //        println(s"${f._1}: ${res.pretty()}")
+    //      })
+    //    })
+    //    println(s"CHECKING THE INFO: ${kb.info.substitute(backmapping).pretty()}")
   }
 }
 
