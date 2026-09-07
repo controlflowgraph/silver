@@ -2017,7 +2017,8 @@ case class MethodInference(engine: ReasoningEngine,
       }
 
       if (!restarting) {
-        val mergedPosts = meth.posts ++ this.methSpec(this.currentMethod.method)._2
+        // TODO: perform posts in reverse order
+        val mergedPosts = (meth.posts ++ this.methSpec(this.currentMethod.method)._2).reverse
 
         val finInj = this.currentMethod.finalInj
         val finalKb = this.knowledge(meth.stop)
@@ -2026,12 +2027,7 @@ case class MethodInference(engine: ReasoningEngine,
         on(engine, startKb, finalKb, meth)
 
         val afterPosts = mergedPosts.foldLeft(finalKb)((kb, p) => processLine(kb, ExhaleLine(meth.stop, finInj, p))._2)
-        println("----------------------------------------------------------")
-        println(afterPosts.pretty())
-        println("BACK MAPPING")
-        println("----------------------------------------------------------")
-        // TODO: WTF IS THIS
-        this.knowledge.put(meth.start, afterPosts)
+//        this.knowledge.put(meth.stop, afterPosts)
         // TODO: extend the post conditions with the information that are left over
       }
     }
