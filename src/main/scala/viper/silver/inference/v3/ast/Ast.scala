@@ -1,6 +1,6 @@
 package viper.silver.inference.v3.ast
 
-import viper.silver.ast.{Add, And, BoolLit, EqCmp, Exp, Field, FieldAccess, FieldAccessPredicate, FractionalPerm, GeCmp, GtCmp, Implies, IntLit, LeCmp, LocalVar, LtCmp, Minus, Mul, NeCmp, Not, NullLit, Or, PermAdd, PredicateAccess, PredicateAccessPredicate, Sub, Type}
+import viper.silver.ast.{Add, And, BoolLit, EqCmp, Exp, Field, FieldAccess, FieldAccessPredicate, FractionalPerm, GeCmp, GtCmp, Implies, IntLit, IntPermMul, LeCmp, LocalVar, LtCmp, Minus, Mul, NeCmp, Not, NullLit, Or, PermAdd, PermMul, PredicateAccess, PredicateAccessPredicate, Sub, Type}
 import viper.silver.inference.v3.FixedPoint
 
 trait TermSub {
@@ -24,7 +24,7 @@ case class PredDef(name: String, params: Seq[String], body: LogicTerm) {
     s"${this.name}(${this.params.mkString(", ")}) := ${this.body.pretty()})"
   }
 
-  def instantiate(pred: PredInst) : LogicTerm = {
+  def instantiate(pred: PredInst): LogicTerm = {
     val mapping = this.params.zip(pred.args).toMap
     val ts = FuncTermSub {
       case t@VarTerm(n, _) => mapping.getOrElse(n, t)
@@ -117,7 +117,7 @@ case class AddTerm(a: Term, b: Term) extends Term {
   override def toExp(): Exp = {
     val leftExp = this.a.toExp()
     val rightExp = this.b.toExp()
-    if(leftExp.typ == viper.silver.ast.Perm) {
+    if (leftExp.typ == viper.silver.ast.Perm) {
       PermAdd(leftExp, rightExp)()
     }
     else {
@@ -138,7 +138,18 @@ case class MulTerm(a: Term, b: Term) extends Term {
     s"${this.a.pretty()} * ${this.b.pretty()}"
   }
 
-  override def toExp(): Exp = Mul(this.a.toExp(), this.b.toExp())()
+  override def toExp(): Exp = {
+    val expA = this.a.toExp()
+    val expB = this.b.toExp()
+    println(expA.typ.getClass.getName)
+    (expA.typ, expB.typ) match {
+      case (viper.silver.ast.Perm, viper.silver.ast.Perm) => PermMul(expA, expB)()
+      case (viper.silver.ast.Int, viper.silver.ast.Perm) => IntPermMul(expA, expB)()
+      case (viper.silver.ast.Perm, viper.silver.ast.Int) => IntPermMul(expB, expA)()
+      case (viper.silver.ast.Int, viper.silver.ast.Int) => Mul(expA, expB)()
+      case _ => throw new IllegalArgumentException(s"Unknown combination of types in multiplication: ${expA.typ}  *  ${expB.typ}")
+    }
+  }
 }
 
 case class SubTerm(a: Term, b: Term) extends Term {
@@ -283,7 +294,7 @@ case class EqCmpTerm(a: Term, b: Term) extends LogicTerm with Comparison {
     ))
   }
 
-  def subst(ts: TermSub): Comparison ={
+  def subst(ts: TermSub): Comparison = {
     EqCmpTerm(
       this.a.substitute(ts),
       this.b.substitute(ts)
@@ -309,7 +320,7 @@ case class NotEqCmpTerm(a: Term, b: Term) extends LogicTerm with Comparison {
     ))
   }
 
-  def subst(ts: TermSub): Comparison ={
+  def subst(ts: TermSub): Comparison = {
     NotEqCmpTerm(
       this.a.substitute(ts),
       this.b.substitute(ts)
@@ -336,7 +347,7 @@ case class LessCmpTerm(a: Term, b: Term) extends LogicTerm with Comparison {
     ))
   }
 
-  def subst(ts: TermSub): Comparison ={
+  def subst(ts: TermSub): Comparison = {
     LessCmpTerm(
       this.a.substitute(ts),
       this.b.substitute(ts)
@@ -364,7 +375,7 @@ case class LessEqCmpTerm(a: Term, b: Term) extends LogicTerm with Comparison {
   }
 
 
-  def subst(ts: TermSub): Comparison ={
+  def subst(ts: TermSub): Comparison = {
     LessEqCmpTerm(
       this.a.substitute(ts),
       this.b.substitute(ts)
@@ -391,7 +402,7 @@ case class GreaterCmpTerm(a: Term, b: Term) extends LogicTerm with Comparison {
     ))
   }
 
-  def subst(ts: TermSub): Comparison ={
+  def subst(ts: TermSub): Comparison = {
     GreaterCmpTerm(
       this.a.substitute(ts),
       this.b.substitute(ts)
@@ -418,7 +429,7 @@ case class GreaterEqCmpTerm(a: Term, b: Term) extends LogicTerm with Comparison 
     ))
   }
 
-  def subst(ts: TermSub): Comparison ={
+  def subst(ts: TermSub): Comparison = {
     GreaterEqCmpTerm(
       this.a.substitute(ts),
       this.b.substitute(ts)
@@ -487,14 +498,14 @@ case class PredFieldAccTerm(exp: FieldAccTerm, perm: Term) extends LogicTerm {
   def pretty(): String = {
     s"acc(${this.exp.pretty()}, ${this.perm.pretty()})"
   }
+
   override def toExp(): Exp = FieldAccessPredicate(
     this.exp.toExp(),
     Some(this.perm.toExp())
   )()
 }
 
-object TermRewriter
-{
+object TermRewriter {
   private def constSubSimp: Seq[TermSub] = Seq(
     FuncTermSub {
       case SubTerm(a, b) => AddTerm(a, NegTerm(b))

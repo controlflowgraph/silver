@@ -385,7 +385,17 @@ case class Heap(rc: RefCounter, initialized: (Set[ValRef], Set[(ValRef, String, 
   }
 
   def pretty(): String = {
-    s"${this.initialized}" + this.objMap.values.map(o => s"${o.ref.pretty()}:\n${o.fields.map(e => s"${e._1}: ${e._2.pretty()}").mkString("\n").indent(2)}".indent(2)).mkString("\n")
+    val currentPretty = this.objMap.values
+      .map(o => s"${o.ref.pretty()}:\n${
+        o.fields.map(e => s"${e._1}: ${e._2.pretty()}")
+          .mkString("\n")
+          .indent(2)
+      }"
+        .indent(2))
+      .mkString("\n")
+    val refsPretty = s"{${this.initialized._1.map(v => v.pretty()).mkString(", ")}}"
+    val initializedPretty = this.initialized._2.map(v => s"${v._1.pretty()}.${v._2}  =>  ${v._3.pretty()}").mkString("\n")
+    s"current:\n${currentPretty.indent(2)}\ninitialized:\n${refsPretty.indent(2)}\n${initializedPretty.indent(2)}"
   }
 
   def lookupField(r: ValRef, field: String): (Heap, ValRef) = {
@@ -591,7 +601,7 @@ case class Potential(partial: Set[ImplTerm]) {
   }
 }
 
-case class KnowledgeBase(assignment: Assignment, heap: Heap, direct: DirectPermissionMask, folded: FoldedPermissionMask, info: LogicTerm, partial: Potential, fieldTypes: Map[String, Type]) {
+case class KnowledgeBase(path: Seq[(Ident, Term)], assignment: Assignment, heap: Heap, direct: DirectPermissionMask, folded: FoldedPermissionMask, info: LogicTerm, partial: Potential, fieldTypes: Map[String, Type]) {
 
   def constructInitialBackMapping(meth: InternalMethod, useAllVariables: Boolean): TermSub = {
     val args: Set[String] = if (!useAllVariables) {
@@ -696,11 +706,11 @@ case class KnowledgeBase(assignment: Assignment, heap: Heap, direct: DirectPermi
   }
 
   def withAssignment(a: Assignment): KnowledgeBase = {
-    KnowledgeBase(a, this.heap, this.direct, this.folded, this.info, this.partial, this.fieldTypes)
+    KnowledgeBase(this.path, a, this.heap, this.direct, this.folded, this.info, this.partial, this.fieldTypes)
   }
 
   def withHeap(h: Heap): KnowledgeBase = {
-    KnowledgeBase(this.assignment, h, this.direct, this.folded, this.info, this.partial, this.fieldTypes)
+    KnowledgeBase(this.path, this.assignment, h, this.direct, this.folded, this.info, this.partial, this.fieldTypes)
   }
 
   def update(fun: Assignment => Heap => DirectPermissionMask => FoldedPermissionMask => LogicTerm => (Assignment, Heap, DirectPermissionMask, FoldedPermissionMask, LogicTerm)): KnowledgeBase = {
@@ -712,7 +722,11 @@ case class KnowledgeBase(assignment: Assignment, heap: Heap, direct: DirectPermi
 
   def update(f: (Assignment, Heap, DirectPermissionMask, FoldedPermissionMask, LogicTerm, Potential) => (Assignment, Heap, DirectPermissionMask, FoldedPermissionMask, LogicTerm, Potential)): KnowledgeBase = {
     val res = f(this.assignment, this.heap, this.direct, this.folded, this.info, this.partial)
-    KnowledgeBase(res._1, res._2, res._3, res._4, res._5, res._6, this.fieldTypes)
+    KnowledgeBase(this.path, res._1, res._2, res._3, res._4, res._5, res._6, this.fieldTypes)
+  }
+
+  def withPath(ident: Ident, condition: Term): KnowledgeBase = {
+    KnowledgeBase(this.path ++ Seq((ident, condition)), this.assignment, this.heap, this.direct, this.folded, this.info, this.partial, this.fieldTypes)
   }
 
   def pretty(): String = {
@@ -766,6 +780,7 @@ case class KnowledgeBase(assignment: Assignment, heap: Heap, direct: DirectPermi
 
 
   def findUnfoldingStrategyInPredicate(engine: ReasoningEngine, defs: Map[String, PredDef], fa: PredFieldAccTerm, instance: PredInstAccTerm): Option[RefoldingStep] = {
+    println(s"FINDING UNFOLDING STRATEGY IN PREDICATE: ${fa.pretty()}      ${instance.pretty()}")
     val predDef = defs(instance.pred.name)
     val instantiated = predDef.instantiate(instance.pred)
     // TODO: EXTEND THE KNOWLEDGE WITH THE PURE INFORMATION WHEN UNFOLDING
@@ -789,7 +804,7 @@ case class KnowledgeBase(assignment: Assignment, heap: Heap, direct: DirectPermi
   private def isClearlyZeroPerm(t: Term): Boolean = {
     TermRewriter.simplify(t) match {
       case PermFracTerm(IntTerm(a), _) => a.equals(BigInt.int2bigInt(0))
-      case _ => true
+      case _ => false
     }
   }
 
@@ -817,9 +832,16 @@ case class KnowledgeBase(assignment: Assignment, heap: Heap, direct: DirectPermi
       Some(RefoldingStrategy(Seq()))
     }
     else {
-      val mapped: Seq[PredInstAccTerm] = this.folded.permissions.map(e => PredInstAccTerm(e._1, e._2))
+      println(s"CHECKING FOLDED: ${this.folded.pretty()}    FOR  ${fa.pretty()}")
+      val conv = this.folded.permissions.map(e => PredInstAccTerm(e._1, e._2))
+      println(s"conv: ${conv.map(_.pretty()).mkString("   ")}")
+      conv.foreach(i => println(TermRewriter.simplify(i.perm)))
+      val mapped: Seq[PredInstAccTerm] = conv
         .filter(i => !isClearlyZeroPerm(i.perm))
         .toSeq
+
+      println(s"MAPPED FOLDED PREDICATE INSTANCES:\n${mapped.map(_.pretty()).mkString("\n")}")
+      println(s"MAPPED: ${mapped}")
 
       val strats = mapped.flatMap(v => findUnfoldingStrategyInPredicate(engine, defs, fa, v))
       Some(RefoldingStrategy(strats))
@@ -924,6 +946,7 @@ case class KnowledgeBase(assignment: Assignment, heap: Heap, direct: DirectPermi
 
   def withInfo(info: LogicTerm): KnowledgeBase = {
     KnowledgeBase(
+      this.path,
       this.assignment,
       this.heap,
       this.direct,
@@ -1148,7 +1171,7 @@ case class LinePropagator[T](f: (Line, T) => AdjustmentResponse[T], ltt: T => Lo
 
 case class MethodInference(engine: ReasoningEngine,
                            defs: Map[String, PredDef], reps: Map[String, InternalMethod], currentMethod: InternalMethod,
-                           knowledge: mutable.HashMap[Ident, KnowledgeBase],
+                           knowledge: mutable.HashMap[Ident, Map[Seq[Term], KnowledgeBase]],
                            methSpec: mutable.HashMap[String, (Seq[LogicTerm], Seq[LogicTerm])],
                            injections: mutable.HashMap[Injection, Seq[RefoldingStrategy]]) {
   def merge(incoming: Seq[KnowledgeBase]): KnowledgeBase = {
@@ -1309,6 +1332,12 @@ case class MethodInference(engine: ReasoningEngine,
 
   def processLine(before: KnowledgeBase, line: Line): (Boolean, KnowledgeBase) = {
     line match {
+      case BranchLine(ln, pre, cond, thn, els) => {
+        (false, before)
+      }
+      case MergeLine(ln, cb, thn, els, lthn, lels) => {
+        (false, before)
+      }
       case AssertLine(ln, inj, exp) => {
         clearInjection(inj)
 
@@ -1486,6 +1515,7 @@ case class MethodInference(engine: ReasoningEngine,
         val ts = MapTermSub(Map((variable, refBeforeAssign.toVarTerm(variable.typ))))
         val subbedInfo = kb.info.substitute(ts).asInstanceOf[LogicTerm] //.and(EqCmpTerm(variable, ))
         val resKb = KnowledgeBase(
+          kbN.path,
           ua,
           kbN.heap,
           kbN.direct.substitute(ts),
@@ -1505,7 +1535,12 @@ case class MethodInference(engine: ReasoningEngine,
         // TODO: this can be improved by first searching for all strategies and then deciding which strategies should be executed
         //       -> iteratively improve current standing until final state reached
         val combinedRaw = reqs.union(self)
+
+        println(before.pretty())
+
+        println(s"SEARCHING FOR COMBINED RAW: ${combinedRaw.map(_.pretty()).mkString(", ")}")
         val (kbNormTarget, combined) = normalizeDirectRequirements(before, combinedRaw.toSeq)
+        println(s"SEARCHING FOR COMBINED: ${combined.map(_.pretty()).mkString(", ")}")
         val kbAfterTarget = combined.foldLeft(kbNormTarget)((k, r) => {
           val strat = k.findUnfoldingStrategy(this.engine, this.defs, r)
           strat.map(s => applyStrategies(this.engine, inj, k, Seq(s))).getOrElse(k)
@@ -1562,6 +1597,7 @@ case class MethodInference(engine: ReasoningEngine,
                 // substitute the occurrences of this field usage with a temporary variable that refers to the val ref
                 val ts = MapTermSub(Map((fa, VarTerm(s"t$$${fieldRef.id}", fa.typ))))
                 val resKb = KnowledgeBase(
+                  kbS.path,
                   kbS.assignment,
                   h5,
                   kb.direct.substitute(ts),
@@ -1611,7 +1647,7 @@ case class MethodInference(engine: ReasoningEngine,
         val ua = a2.assign(target.name, valRef, target.typ)
 
         val afterAssign = KnowledgeBase(
-          ua, before.heap, before.direct, before.folded, before.info, before.partial, before.fieldTypes
+          before.path, ua, before.heap, before.direct, before.folded, before.info, before.partial, before.fieldTypes
         )
 
         // substitute the old variable and inhale the new permissions
@@ -1768,7 +1804,10 @@ case class MethodInference(engine: ReasoningEngine,
       ContinueAdjustment(payload)
     }
     else {
-      val base = this.knowledge(ident)
+      // TODO: what to do if different branches at a specific identifier cause different results?
+      //       would this even be possible/problematic?
+      // TODO: fix this
+      val base = this.knowledge(ident).values.head
       val proofRes = this.engine.prove(base, lp.toLT(payload))
       if (proofRes == Sat) {
         // knowledge is already fulfilled at the current branch and should thus not be propagated further
@@ -1964,6 +2003,12 @@ case class MethodInference(engine: ReasoningEngine,
     }
   }
 
+  private def setKnowledgeBase(ident: Ident, kb: KnowledgeBase): Unit = {
+    val before = this.knowledge.getOrElse(ident, Map())
+    val after = before.updated(kb.path.map(_._2), kb)
+    this.knowledge.put(ident, after)
+  }
+
   def infer(program: Program, meth: InternalMethod) = {
     // generate mapping of field definitions to their corresponding type
     val fieldTypes = program.fields.map(f => f.name -> f.typ).toMap
@@ -1980,64 +2025,115 @@ case class MethodInference(engine: ReasoningEngine,
 
       // generate an initial assignment based of the arguments of the method
       val initAssignment = meth.args.foldLeft(new Assignment(counter))((a, f) => a.assign(f._1, counter.freshValRef(), f._2))
-      val empty = KnowledgeBase(initAssignment, new Heap(counter), new DirectPermissionMask(), new FoldedPermissionMask(), BoolTerm(true), new Potential(), fieldTypes)
+      val empty = KnowledgeBase(Seq(), initAssignment, new Heap(counter), new DirectPermissionMask(), new FoldedPermissionMask(), BoolTerm(true), new Potential(), fieldTypes)
 
       // inhale the preconditions
       // TODO: fix the restart position
       val mergedPres = meth.pres ++ this.methSpec(this.currentMethod.method)._1
       val afterPres = mergedPres.foldLeft(empty)((kb, p) => processLine(kb, InhaleLine(meth.start, p))._2)
-      this.knowledge.put(meth.start, afterPres)
+      setKnowledgeBase(meth.start, afterPres)
 
       var open = mesh(meth.start).toSeq
 
       while (!restarting && open.nonEmpty) {
         val current = open.head
         println(s"processing line: ${current}")
-        val kb = merge(mesh.filter(e => e._2.contains(current)).keys.map(this.knowledge).toSeq)
 
-        val line = lines(current)
-        println(s"line: ${line.pretty()}")
+        val kbs = mesh.filter(e => e._2.contains(current))
+          .keys
+          .flatMap(i => {
+            if (lines.contains(i)) {
+              lines(i) match {
+                case BranchLine(ln, pre, cond, thn, els) => {
+                  val assumption = if (thn == current) cond else NotTerm(cond)
+                  this.knowledge(i).values
+                    .map(k => k.withPath(ln, assumption).withInfo(assumption))
+                }
+                case _ => this.knowledge(i).values
+              }
+            } else {
+              this.knowledge(i).values
+            }
+          })
 
-        val (shouldRestart, after) = processLine(kb, line)
-        restarting = shouldRestart
+        kbs.foreach(kb => {
+          if (!restarting) {
+            val line = lines(current)
+            println(s"line: ${line.pretty()}")
+
+            val (shouldRestart, after) = processLine(kb, line)
+            restarting = shouldRestart
 
 
-        println(s":::::::::::::::: AFTER :::::::::::::::::")
-        println(after.pretty())
+            println(s":::::::::::::::: AFTER :::::::::::::::::")
+            println(after.pretty())
 
 
-        this.knowledge.put(current, after)
+            setKnowledgeBase(current, after)
+
+            if (restarting) {
+              // TODO: fix the restarting logic
+              throw new IllegalArgumentException(s"RESTARTING :/ ${line.pretty()}")
+            }
+          }
+        })
 
         open = open.tail ++ mesh(current).toSeq
-
-
-        if (restarting) {
-          throw new IllegalArgumentException(s"RESTARTING :/ ${line.pretty()}")
-        }
       }
 
       if (!restarting) {
-        // TODO: perform posts in reverse order
-        val mergedPosts = (meth.posts ++ this.methSpec(this.currentMethod.method)._2).reverse
 
-        val finInj = this.currentMethod.finalInj
-        val finalKb = this.knowledge(meth.stop)
+        val startKbs = this.knowledge(meth.start).values
+        if (startKbs.size != 1) {
+          throw new IllegalArgumentException("Expected a single knowledge base at the start of the method!")
+        }
+        val startKb = startKbs.head
 
-        val startKb = this.knowledge(meth.start)
-        on(engine, startKb, finalKb, meth)
+        val finalKbs = this.knowledge(meth.stop).values
 
-        val afterPosts = mergedPosts.foldLeft(finalKb)((kb, p) => processLine(kb, ExhaleLine(meth.stop, finInj, p))._2)
-//        this.knowledge.put(meth.stop, afterPosts)
-        // TODO: extend the post conditions with the information that are left over
+        finalKbs.foreach(finalKb => {
+          // TODO: the refolding strategies must match
+          // TODO: the injections must be cleared per path/across all paths
+          val mergedPosts = (meth.posts ++ this.methSpec(this.currentMethod.method)._2).reverse
+
+          val finInj = this.currentMethod.finalInj
+
+          on(this.engine, startKb, finalKb, meth)
+
+          val afterPosts = mergedPosts.foldLeft(finalKb)((kb, p) => processLine(kb, ExhaleLine(meth.stop, finInj, p))._2)
+          //        this.knowledge.put(meth.stop, afterPosts)
+          // TODO: extend the post conditions with the information that are left over
+        })
+
+      }
+
+      if (true) {
+        println("::::::::::::::::::::::::::::::::: KB DUMP :::::::::::::::::::::::::::::::::")
+        this.knowledge.toSeq
+          .sortBy(v => v._1.value)
+          .foreach(e => {
+            println(s"Identifier: ${e._1.pretty()}")
+            e._2.foreach(k => {
+              println(s"Path: ${k._1.map(_.pretty()).mkString("  &&  ")}".indent(2))
+              println(k._2.pretty().indent(4))
+            })
+          })
+        println(":::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::")
       }
     }
   }
+
+  // TODO: add dummy line that can be used by the merge line to similarize the knowledge bases as far as possible
+  //       fold and unfold the different parts that are available to match each other so that a single permission story/refolding strategy is able to be applied to all the knowledge bases
+  //       maybe think about using potential knowledge bases
+  // TODO: split this file into smaller parts
+  // TODO: maybe consider all knowledge bases at the same time. synthesize a single refolding strategy and check against all other knowledge bases
 
   private def on1(engine: ReasoningEngine, kb: KnowledgeBase, objRef: ValRef, ibm: TermSub, bm: TermSub): Unit = {
     if (kb.heap.objMap.contains(objRef)) {
       val obj = kb.heap.objMap(objRef)
       val source = objRef.toVarTerm(Ref)
-//      println(s"${objRef.pretty()}: ${source.substitute(bm).pretty()}  ==  old(${source.substitute(ibm).pretty()})")
+      //      println(s"${objRef.pretty()}: ${source.substitute(bm).pretty()}  ==  old(${source.substitute(ibm).pretty()})")
       obj.fields.foreach(f => {
         // TODO: this can be adjusted to only check for > 0 permissions and not a specific amount
         val desired = PermAmount.READ
@@ -2482,9 +2578,6 @@ case class ViperReasoningEngine(verifier: Verifier, program: Program) extends Re
       stmts,
       decls
     )()
-
-    //    println("PROOF SPEC:")
-    //    println(body)
 
     val proofMethod = Method("proof", Seq(), Seq(), Seq(), Seq(), Some(body))()
 
