@@ -5,6 +5,13 @@ import viper.silver.inference.v3.FixedPoint
 
 trait TermSub {
   def apply(t: Term): Term
+
+  def followedBy(other: TermSub): TermSub = {
+    FuncTermSub(t => {
+      t.substitute(this)
+        .substitute(other)
+    })
+  }
 }
 
 case class MapTermSub(replacements: Map[Term, Term]) extends TermSub {
@@ -141,7 +148,6 @@ case class MulTerm(a: Term, b: Term) extends Term {
   override def toExp(): Exp = {
     val expA = this.a.toExp()
     val expB = this.b.toExp()
-    println(expA.typ.getClass.getName)
     (expA.typ, expB.typ) match {
       case (viper.silver.ast.Perm, viper.silver.ast.Perm) => PermMul(expA, expB)()
       case (viper.silver.ast.Int, viper.silver.ast.Perm) => IntPermMul(expA, expB)()

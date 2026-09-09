@@ -651,6 +651,22 @@ case class KnowledgeBase(path: Seq[(Ident, Term)], assignment: Assignment, heap:
     MapTermSub(mapping.toMap)
   }
 
+  def constructInfoBackMapping(): TermSub = {
+    MapTermSub(constructBackMappingFromInfoTerm(this.info))
+  }
+
+  private def constructBackMappingFromInfoTerm(term: Term): Map[Term, Term] = {
+    term match {
+      case AndTerm(a, b) => {
+        val bmA = constructBackMappingFromInfoTerm(a)
+        val bmB = constructBackMappingFromInfoTerm(b)
+        bmA ++ bmB
+      }
+      case EqCmpTerm(v@VarTerm(n, _), b) if n.startsWith("t$") => Map((v, b))
+      case _ => Map()
+    }
+  }
+
   def constructBackMapping(meth: InternalMethod, useAllVariables: Boolean): TermSub = {
     val args: Set[String] = if (!useAllVariables) {
       meth.args.map(_._1).toSet
@@ -780,7 +796,6 @@ case class KnowledgeBase(path: Seq[(Ident, Term)], assignment: Assignment, heap:
 
 
   def findUnfoldingStrategyInPredicate(engine: ReasoningEngine, defs: Map[String, PredDef], fa: PredFieldAccTerm, instance: PredInstAccTerm): Option[RefoldingStep] = {
-    println(s"FINDING UNFOLDING STRATEGY IN PREDICATE: ${fa.pretty()}      ${instance.pretty()}")
     val predDef = defs(instance.pred.name)
     val instantiated = predDef.instantiate(instance.pred)
     // TODO: EXTEND THE KNOWLEDGE WITH THE PURE INFORMATION WHEN UNFOLDING
@@ -801,6 +816,11 @@ case class KnowledgeBase(path: Seq[(Ident, Term)], assignment: Assignment, heap:
     }
   }
 
+  private def isNotZeroPerm(engine: ReasoningEngine, term: Term): Boolean = {
+    val zero = PermFracTerm(IntTerm(BigInt.int2bigInt(0)), IntTerm(BigInt.int2bigInt(1)))
+    engine.prove(this, GreaterCmpTerm(term, zero)) == Sat
+  }
+
   private def isClearlyZeroPerm(t: Term): Boolean = {
     TermRewriter.simplify(t) match {
       case PermFracTerm(IntTerm(a), _) => a.equals(BigInt.int2bigInt(0))
@@ -817,6 +837,7 @@ case class KnowledgeBase(path: Seq[(Ident, Term)], assignment: Assignment, heap:
     else {
       val mapped: Seq[PredInstAccTerm] = this.folded.permissions.map(e => PredInstAccTerm(e._1, e._2))
         .filter(i => !isClearlyZeroPerm(i.perm))
+        .filter(i => isNotZeroPerm(engine, i.perm))
         .toSeq
 
       val strats = mapped.flatMap(v => findUnfoldingStrategyInPredicate(engine, defs, fa, v))
@@ -832,27 +853,13 @@ case class KnowledgeBase(path: Seq[(Ident, Term)], assignment: Assignment, heap:
       Some(RefoldingStrategy(Seq()))
     }
     else {
-      println(s"CHECKING FOLDED: ${this.folded.pretty()}    FOR  ${fa.pretty()}")
-      val conv = this.folded.permissions.map(e => PredInstAccTerm(e._1, e._2))
-      println(s"conv: ${conv.map(_.pretty()).mkString("   ")}")
-      conv.foreach(i => println(TermRewriter.simplify(i.perm)))
-      val mapped: Seq[PredInstAccTerm] = conv
+      val mapped: Seq[PredInstAccTerm] = this.folded.permissions.map(e => PredInstAccTerm(e._1, e._2))
         .filter(i => !isClearlyZeroPerm(i.perm))
+        .filter(i => isNotZeroPerm(engine, i.perm))
         .toSeq
-
-      println(s"MAPPED FOLDED PREDICATE INSTANCES:\n${mapped.map(_.pretty()).mkString("\n")}")
-      println(s"MAPPED: ${mapped}")
 
       val strats = mapped.flatMap(v => findUnfoldingStrategyInPredicate(engine, defs, fa, v))
       Some(RefoldingStrategy(strats))
-
-      //      val res = findContainedFieldPermission(defs, mapped, fa.pred, 0)
-      //      println(s"found ${res.length} refolding strategies for ${fa.pretty()}")
-      //      res.map(e => RefoldingStrategy(e.steps, TermRewriter.simplify(e.perm)))
-      //        .foreach(e => println(e.pretty()))
-      //      //        res.flatMap(p => findContainedFieldPermission(defs, p., fa.pred))
-      //      //        .foreach(a => println(s"found unfolding strategy: ${fa.pred.pretty()} ${a._1.pretty()}: ${a._2.pretty()}"))
-      //      None
     }
   }
 
@@ -962,6 +969,8 @@ trait RefoldingStep {
   def scale(f: Term): RefoldingStep
 
   def pretty(): String
+
+  def rewrite(ts: TermSub): RefoldingStep
 }
 
 case class UnfoldingStep(pred: PredInst, perm: Term, subs: Seq[RefoldingStep]) extends RefoldingStep {
@@ -971,6 +980,13 @@ case class UnfoldingStep(pred: PredInst, perm: Term, subs: Seq[RefoldingStep]) e
 
   def pretty(): String = {
     s"unfolding ${this.pred.pretty()} => ${this.perm.pretty()}\n${this.subs.map(_.pretty()).mkString("\n").indent(2)}"
+  }
+
+  def rewrite(ts: TermSub): RefoldingStep = {
+    val up = PredInst(this.pred.name, this.pred.args.map(a => a.substitute(ts)))
+    val perm = this.perm.substitute(ts)
+    val subs = this.subs.map(_.rewrite(ts))
+    UnfoldingStep(up, perm, subs)
   }
 }
 
@@ -982,11 +998,21 @@ case class FoldingStep(pred: PredInst, perm: Term) extends RefoldingStep {
   def pretty(): String = {
     s"folding ${this.pred.pretty()}; ${this.perm.pretty()}"
   }
+
+  def rewrite(ts: TermSub): RefoldingStep = {
+    val up = PredInst(this.pred.name, this.pred.args.map(a => a.substitute(ts)))
+    val perm = this.perm.substitute(ts)
+    FoldingStep(up, perm)
+  }
 }
 
 case class RefoldingStrategy(steps: Seq[RefoldingStep]) {
   def pretty(): String = {
     s"${this.steps.map(_.pretty()).mkString("\n")}"
+  }
+
+  def rewrite(ts: TermSub): RefoldingStrategy = {
+    RefoldingStrategy(this.steps.map(s => s.rewrite(ts)))
   }
 }
 
@@ -1250,7 +1276,13 @@ case class MethodInference(engine: ReasoningEngine,
   }
 
   private def applyRefoldingStrategy(engine: ReasoningEngine, inj: Injection, before: KnowledgeBase, strat: RefoldingStrategy): KnowledgeBase = {
-    addRefoldingStrategiesToInjectionPoint(inj, Seq(strat))
+    val bm = before.constructBackMapping(this.currentMethod, useAllVariables = true)
+    val infoBm = before.constructInfoBackMapping()
+    val ts = bm.followedBy(infoBm)
+    val rewritten = FixedPoint.compute(strat, (s: RefoldingStrategy) => {
+      s.rewrite(ts)
+    })
+    addRefoldingStrategiesToInjectionPoint(inj, Seq(rewritten))
     strat.steps.foldLeft(before)((a, b) => applyRefoldingStep(engine, a, b))
   }
 
@@ -1536,11 +1568,7 @@ case class MethodInference(engine: ReasoningEngine,
         //       -> iteratively improve current standing until final state reached
         val combinedRaw = reqs.union(self)
 
-        println(before.pretty())
-
-        println(s"SEARCHING FOR COMBINED RAW: ${combinedRaw.map(_.pretty()).mkString(", ")}")
         val (kbNormTarget, combined) = normalizeDirectRequirements(before, combinedRaw.toSeq)
-        println(s"SEARCHING FOR COMBINED: ${combined.map(_.pretty()).mkString(", ")}")
         val kbAfterTarget = combined.foldLeft(kbNormTarget)((k, r) => {
           val strat = k.findUnfoldingStrategy(this.engine, this.defs, r)
           strat.map(s => applyStrategies(this.engine, inj, k, Seq(s))).getOrElse(k)
