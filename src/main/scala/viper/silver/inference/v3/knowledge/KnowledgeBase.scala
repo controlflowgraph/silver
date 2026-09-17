@@ -1,12 +1,16 @@
 package viper.silver.inference.v3.knowledge
 
 import viper.silver.ast.{Ref, Type}
-import viper.silver.inference.v3.{FoldingStep, PredicateCollector, ReasoningEngine, RefoldingStep, RefoldingStrategy, Sat, UnfoldingStep, ValRef}
-import viper.silver.inference.v3.ast.{AndTerm, EqCmpTerm, FieldAccTerm, GreaterCmpTerm, Ident, IntTerm, InternalMethod, LessEqCmpTerm, LogicTerm, MapTermSub, MulTerm, PermFracTerm, PredDef, PredFieldAccTerm, PredInst, PredInstAccTerm, Term, TermRewriter, TermSub, VarTerm}
+import viper.silver.inference.v3.{FoldingStep, MagicWandManager, PredicateCollector, ReasoningEngine, RefCounter, RefoldingStep, RefoldingStrategy, Sat, TermNormalization, UnSat, UnfoldingStep, ValRef}
+import viper.silver.inference.v3.ast.{AndTerm, BaguetteMagic, BoolTerm, EqCmpTerm, FieldAccTerm, GreaterCmpTerm, Ident, IntTerm, InternalMethod, LessEqCmpTerm, LogicTerm, MapTermSub, MulTerm, PermFracTerm, PredDef, PredFieldAccTerm, PredInst, PredInstAccTerm, Term, TermRewriter, TermSub, VarTerm}
 
 import scala.collection.mutable
 
-case class KnowledgeBase(path: Seq[(Ident, Term)], assignment: Assignment, heap: Heap, direct: DirectPermissionMask, folded: FoldedPermissionMask, info: LogicTerm, partial: Potential, fieldTypes: Map[String, Type]) {
+case class KnowledgeBase(path: Seq[(Ident, Term)], assignment: Assignment, heap: Heap, direct: DirectPermissionMask, folded: FoldedPermissionMask, info: LogicTerm, partial: Potential, mwm: MagicWandManager, fieldTypes: Map[String, Type]) {
+
+  def this(fieldTypes: Map[String, Type], rc: RefCounter) = {
+    this(Seq(), new Assignment(rc), new Heap(rc), new DirectPermissionMask(), new FoldedPermissionMask(), BoolTerm(true), new Potential(), new MagicWandManager(), fieldTypes)
+  }
 
   def constructInitialBackMapping(meth: InternalMethod, useAllVariables: Boolean): TermSub = {
     val args: Set[String] = if (!useAllVariables) {
@@ -121,16 +125,18 @@ case class KnowledgeBase(path: Seq[(Ident, Term)], assignment: Assignment, heap:
       open = open.diff(Set(current))
     }
 
+    println("backmapping start :::::")
     mapping.foreach(e => println(s"${e._1.pretty()} ==> ${e._2.pretty()}"))
+    println("backmapping end :::::")
     MapTermSub(mapping.toMap)
   }
 
   def withAssignment(a: Assignment): KnowledgeBase = {
-    KnowledgeBase(this.path, a, this.heap, this.direct, this.folded, this.info, this.partial, this.fieldTypes)
+    KnowledgeBase(this.path, a, this.heap, this.direct, this.folded, this.info, this.partial, this.mwm, this.fieldTypes)
   }
 
   def withHeap(h: Heap): KnowledgeBase = {
-    KnowledgeBase(this.path, this.assignment, h, this.direct, this.folded, this.info, this.partial, this.fieldTypes)
+    KnowledgeBase(this.path, this.assignment, h, this.direct, this.folded, this.info, this.partial, this.mwm, this.fieldTypes)
   }
 
   def update(fun: Assignment => Heap => DirectPermissionMask => FoldedPermissionMask => LogicTerm => (Assignment, Heap, DirectPermissionMask, FoldedPermissionMask, LogicTerm)): KnowledgeBase = {
@@ -142,11 +148,16 @@ case class KnowledgeBase(path: Seq[(Ident, Term)], assignment: Assignment, heap:
 
   def update(f: (Assignment, Heap, DirectPermissionMask, FoldedPermissionMask, LogicTerm, Potential) => (Assignment, Heap, DirectPermissionMask, FoldedPermissionMask, LogicTerm, Potential)): KnowledgeBase = {
     val res = f(this.assignment, this.heap, this.direct, this.folded, this.info, this.partial)
-    KnowledgeBase(this.path, res._1, res._2, res._3, res._4, res._5, res._6, this.fieldTypes)
+    KnowledgeBase(this.path, res._1, res._2, res._3, res._4, res._5, res._6, this.mwm, this.fieldTypes)
+  }
+
+  def update(f: (Assignment, Heap, DirectPermissionMask, FoldedPermissionMask, LogicTerm, Potential, MagicWandManager) => (Assignment, Heap, DirectPermissionMask, FoldedPermissionMask, LogicTerm, Potential, MagicWandManager)): KnowledgeBase = {
+    val res = f(this.assignment, this.heap, this.direct, this.folded, this.info, this.partial, this.mwm)
+    KnowledgeBase(this.path, res._1, res._2, res._3, res._4, res._5, res._6, res._7, this.fieldTypes)
   }
 
   def withPath(ident: Ident, condition: Term): KnowledgeBase = {
-    KnowledgeBase(this.path ++ Seq((ident, condition)), this.assignment, this.heap, this.direct, this.folded, this.info, this.partial, this.fieldTypes)
+    KnowledgeBase(this.path ++ Seq((ident, condition)), this.assignment, this.heap, this.direct, this.folded, this.info, this.partial, this.mwm, this.fieldTypes)
   }
 
   def pretty(): String = {
@@ -156,18 +167,22 @@ case class KnowledgeBase(path: Seq[(Ident, Term)], assignment: Assignment, heap:
     val prettyFolded = this.folded.pretty().indent(2)
     val prettyDNF = this.info.pretty().indent(2)
     val prettyPot = this.partial.pretty().indent(2)
-    s"assignment:\n$prettyAssignment\nheap:\n$prettyHeap\ndirect:\n$prettyDirect\nfolded:\n$prettyFolded\nfacts:\n$prettyDNF\npotential:\n${prettyPot}"
+    val prettyMag = this.mwm.pretty().indent(2)
+    s"assignment:\n$prettyAssignment\nheap:\n$prettyHeap\ndirect:\n$prettyDirect\nfolded:\n$prettyFolded\nfacts:\n$prettyDNF\npotential:\n${prettyPot}\nbaguettes:\n${prettyMag}"
   }
 
   def hasEnoughPermissions(engine: ReasoningEngine, amount: Term, higher: Term): Boolean = {
     val lowSimp = TermRewriter.simplify(amount)
     val highSimp = TermRewriter.simplify(higher)
+    println(s"CHECKING IF: ${amount.pretty()} <= ${higher.pretty()}")
     (lowSimp, highSimp) match {
       case (PermFracTerm(IntTerm(a), IntTerm(b)), PermFracTerm(IntTerm(c), IntTerm(d))) =>
+        println("CHECKING WITH CONSTANT!")
         val fracA = a.doubleValue / b.doubleValue
         val fracB = c.doubleValue / d.doubleValue
         fracA <= fracB
       case _ =>
+        println("CHECKING WITH ENGINE!")
         val proofResult = engine.prove(this, LessEqCmpTerm(amount, higher))
         proofResult == Sat
     }
@@ -222,6 +237,7 @@ case class KnowledgeBase(path: Seq[(Ident, Term)], assignment: Assignment, heap:
   private def isNotZeroPerm(engine: ReasoningEngine, term: Term): Boolean = {
     val zero = PermFracTerm(IntTerm(BigInt.int2bigInt(0)), IntTerm(BigInt.int2bigInt(1)))
     engine.prove(this, GreaterCmpTerm(term, zero)) == Sat
+    //    engine.prove(this, EqCmpTerm(term, zero)) != UnSat
   }
 
   private def isClearlyZeroPerm(t: Term): Boolean = {
@@ -244,8 +260,17 @@ case class KnowledgeBase(path: Seq[(Ident, Term)], assignment: Assignment, heap:
         .toSeq
 
       val strats = mapped.flatMap(v => findUnfoldingStrategyInPredicate(engine, defs, fa, v))
-      Some(RefoldingStrategy(strats))
+      if (strats.nonEmpty) {
+        Some(RefoldingStrategy(strats))
+      }
+      else {
+        None
+      }
     }
+  }
+
+  def findUnfoldingStrategyInBaguette(engine: ReasoningEngine, defs: Map[String, PredDef], mag: BaguetteMagic): Option[RefoldingStrategy] = {
+    findUnfoldingStrategyInPredicate(engine, defs, )
   }
 
 
@@ -262,29 +287,68 @@ case class KnowledgeBase(path: Seq[(Ident, Term)], assignment: Assignment, heap:
         .toSeq
 
       val strats = mapped.flatMap(v => findUnfoldingStrategyInPredicate(engine, defs, fa, v))
-      Some(RefoldingStrategy(strats))
+      if (strats.nonEmpty) {
+        Some(RefoldingStrategy(strats))
+      }
+      else {
+        None
+      }
     }
   }
 
   def unfold(engine: ReasoningEngine, defs: Map[String, PredDef], pred: PredInst, perm: Term): KnowledgeBase = {
-    update(a => h => d => f => i => {
-      val predDef = defs(pred.name)
+    val predDef = defs(pred.name)
 
-      val instantiated = predDef.instantiate(pred)
-      val direct = PredicateCollector.collectDirectPredicates(engine, instantiated, this)
-      val folded = PredicateCollector.collectFoldedPredicates(engine, instantiated, this)
-      val pure = PredicateCollector.stripToPure(engine, instantiated, this)
+    val instantiated = predDef.instantiate(pred)
+    val direct = PredicateCollector.collectDirectPredicates(engine, instantiated, this)
+    val folded = PredicateCollector.collectFoldedPredicates(engine, instantiated, this)
+    val pure = PredicateCollector.stripToPure(engine, instantiated, this)
 
-      val ud = direct
-        .map(d => PredFieldAccTerm(d.exp, MulTerm(d.perm, perm)))
-        .foldLeft(d)((a, b) => a.inhale(b))
-      val uf = folded
-        .map(d => PredInstAccTerm(d.pred, MulTerm(d.perm, perm)))
-        .foldLeft(f.exhale(pred, perm))((a, b) => a.inhale(b))
-      val ui = i.and(pure)
+    // exhale the folded predicate amount
+    val exhaled = this.update((a, h, d, f, i, p) => (a, h, d, f.exhale(pred, perm), i, p))
 
-      (a, h, ud, uf, ui)
-    })
+    // TODO: check for any knowledge where access has been lost and eliminate info
+    //          ---> for inhale and exhale
+
+    val ui = exhaled.withInfo(exhaled.info.and(pure))
+
+    // inhale normalized amount
+    val ud = direct
+      .map(d => PredFieldAccTerm(d.exp, MulTerm(d.perm, perm)))
+      .foldLeft(ui)((a, b) => {
+        val (afterExpNorm, refE, typE, infoE) = TermNormalization.computeNormalizedValueRef(a, a.assignment.rc, b.exp.src)
+        val (afterPermNorm, refP, typP, infoP) = TermNormalization.computeNormalizedValueRef(afterExpNorm, a.assignment.rc, b.perm)
+
+        val varE = refE.toVarTerm(typE)
+        val varP = refP.toVarTerm(typP)
+
+        val uFA = PredFieldAccTerm(
+          FieldAccTerm(varE, b.exp.field, b.exp.typ),
+          varP
+        )
+        afterPermNorm.update((a, h, d, f, i, p) => {
+          (a, h, d.inhale(uFA), f, i.and(infoE).and(infoP), p)
+        })
+      })
+
+    val uf = folded
+      .map(d => PredInstAccTerm(d.pred, MulTerm(d.perm, perm)))
+      .foldLeft(ud)((a, b) => {
+        val (afterExpNorm, args, infoE) = TermNormalization.computeNormalizedTermList(a, a.assignment.rc, b.pred.args)
+        val (afterPermNorm, refP, typP, infoP) = TermNormalization.computeNormalizedValueRef(afterExpNorm, a.assignment.rc, b.perm)
+
+        val varP = refP.toVarTerm(typP)
+
+        val uFA = PredInstAccTerm(
+          PredInst(b.pred.name, args),
+          varP
+        )
+        afterPermNorm.update((a, h, d, f, i, p) => {
+          (a, h, d, f.inhale(uFA), i.and(infoE).and(infoP), p)
+        })
+      })
+
+    uf
   }
 
   def fold(engine: ReasoningEngine, defs: Map[String, PredDef], pred: PredInst, perm: Term): KnowledgeBase = {
@@ -328,11 +392,19 @@ case class KnowledgeBase(path: Seq[(Ident, Term)], assignment: Assignment, heap:
     val mappedDirect = direct.map(d => findUnfoldingStrategy(engine, defs, d))
     val mappedFolded = folded.map(f => findRefoldingStrategy(engine, defs, f))
 
+    println(s"CHECKING FOR DIRECT REQUIREMENTS:")
+    println(s"${direct.zip(mappedDirect).map(v => s"${v._1.pretty()}   =>  ${v._2}").mkString("\n").indent(2)}")
+
     mergeRefoldingStrategyOptions(mappedDirect ++ mappedFolded)
       .map(r => RefoldingStrategy(r.steps ++ Seq(FoldingStep(f.pred, f.perm))))
   }
 
   def findRefoldingStrategy(engine: ReasoningEngine, defs: Map[String, PredDef], f: PredInstAccTerm): Option[RefoldingStrategy] = {
+    /*
+      when finding a refolding strategy first search for a typical refolding
+      if nothing is found that way check if a magic wand application could solve this issue
+    */
+
     val current = this.folded.getAmount(f.pred)
     if (hasEnoughPermissions(engine, f.perm, current)) {
       Some(RefoldingStrategy(Seq()))
@@ -363,7 +435,34 @@ case class KnowledgeBase(path: Seq[(Ident, Term)], assignment: Assignment, heap:
       this.folded,
       info,
       this.partial,
+      this.mwm,
       this.fieldTypes
     )
   }
 }
+
+
+/*
+
+  statt related work: background chapter
+
+  formal problem statement section (unsoundness ist related)
+
+  examples sollte es zwischendurch immer eingestreut geben
+  evaluation später als extra kapitel
+
+  reihenfolge neu/korrekt ordnen
+  nach dem problem statement die algorithmus pipeline vorstellen
+
+  template runterladen: acm small format
+
+  ich suche eine verallgemeinerung für die call sites und die constraints suchen
+
+  globale analyse die nach allen methoden inferences schaut wie die benutzt werden
+  - generate lemmas that prove the:
+
+  write permissions überall fordern
+  mit magic wands arbeiten
+
+
+*/

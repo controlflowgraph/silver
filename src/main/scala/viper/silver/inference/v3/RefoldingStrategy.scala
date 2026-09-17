@@ -1,6 +1,6 @@
 package viper.silver.inference.v3
 
-import viper.silver.inference.v3.ast.{MulTerm, PredInst, Term, TermSub}
+import viper.silver.inference.v3.ast._
 
 trait RefoldingStep {
   def scale(f: Term): RefoldingStep
@@ -8,6 +8,20 @@ trait RefoldingStep {
   def pretty(): String
 
   def rewrite(ts: TermSub): RefoldingStep
+}
+
+case class PackageStep(wand: BaguetteMagic, steps: Seq[RefoldingStep]) extends RefoldingStep {
+  def scale(f: Term): RefoldingStep = {
+    PackageStep(this.wand.scale(f), this.steps.map(s => s.scale(f)))
+  }
+
+  def pretty(): String = {
+    s"package [${this.wand.pretty()}] {\n${this.steps.map(_.pretty()).mkString("\n").indent(2)}\n}"
+  }
+
+  def rewrite(ts: TermSub): RefoldingStep = {
+    PackageStep(this.wand.rewrite(ts), this.steps.map(_.rewrite(ts)))
+  }
 }
 
 case class UnfoldingStep(pred: PredInst, perm: Term, subs: Seq[RefoldingStep]) extends RefoldingStep {

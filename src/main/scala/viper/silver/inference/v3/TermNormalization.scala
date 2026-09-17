@@ -1,10 +1,17 @@
 package viper.silver.inference.v3
 
-import viper.silver.ast.Type
+import viper.silver.ast.{BoolLit, Type}
 import viper.silver.inference.v3.ast.{AddTerm, AndTerm, BoolTerm, EqCmpTerm, FieldAccTerm, GreaterCmpTerm, GreaterEqCmpTerm, IntTerm, LessCmpTerm, LessEqCmpTerm, LogicTerm, MulTerm, NegTerm, NotEqCmpTerm, NotTerm, NullTerm, OrTerm, PermFracTerm, SubTerm, Term, VarTerm}
 import viper.silver.inference.v3.knowledge.KnowledgeBase
 
 object TermNormalization {
+
+  def computeNormalizedTermList(kb: KnowledgeBase, counter: RefCounter, terms: Seq[Term]): (KnowledgeBase, Seq[Term], LogicTerm) = {
+    terms.foldLeft((kb, Seq[Term](), BoolTerm(true).asInstanceOf[LogicTerm]))((acc, t) => {
+      val (afterKb, ref, typ, info) = TermNormalization.computeNormalizedValueRef(acc._1, counter, t)
+      (afterKb, acc._2 ++ Seq(ref.toVarTerm(typ)), acc._3.and(info))
+    })
+  }
 
   private def computeNormalizedBinaryOperator(kb: KnowledgeBase, counter: RefCounter, resType: Type, left: Term, right: Term, op: (Term, Term) => Term): (KnowledgeBase, ValRef, Type, LogicTerm) = {
     val (kbA, refA, typA, infoA) = computeNormalizedValueRef(kb, counter, left)

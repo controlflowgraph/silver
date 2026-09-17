@@ -188,7 +188,7 @@ case class ViperReasoningEngine(verifier: Verifier, program: Program) extends Re
 
     val result = this.verifier.verify(proofProgram)
 
-    println(s"VERIFICATION RESULT: ${result}")
+//    println(s"VERIFICATION RESULT: ${result}")
 
     result match {
       case Success => Sat

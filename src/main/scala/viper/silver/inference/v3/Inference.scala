@@ -1,11 +1,10 @@
 package viper.silver.inference.v3
 
-import viper.silver.ast.{AbstractAssign, AbstractDomainFuncApp, AbstractLocalVar, AccessPredicate, AnySetBinExp, AnySetExp, AnySetUnExp, Apply, Applying, Assert, Asserting, Assume, BackendFuncApp, BinExp, CondExp, DatatypeType, DebugLabelledOld, DomainBinExp, DomainFuncApp, DomainOpExp, DomainUnExp, EmptyMap, EmptyMultiset, EmptySeq, EmptySet, EqualityCmp, Exhale, Exists, Exp, ExplicitMap, ExplicitMultiset, ExplicitSeq, ExplicitSet, ExtensionStmt, FieldAccess, FieldAccessPredicate, FieldAssign, Fold, ForPerm, Forall, FuncApp, FuncLikeApp, Function, Goto, If, InferInfo, Inhale, InhaleExhaleExp, Injection, Label, LabelledOld, Let, Literal, LocalVar, LocalVarAssign, LocalVarDecl, LocalVarDeclStmt, LocalVarWithVersion, LocationAccess, MagicWand, MapCardinality, MapContains, MapDomain, MapExp, MapLookup, MapRange, MapUpdate, Maplet, Method, MethodCall, MultisetExp, NewStmt, Old, OldExp, Package, PermExp, PredicateAccess, PredicateAccessPredicate, Program, QuantifiedExp, Quasihavoc, Quasihavocall, RangeSeq, Ref, Result, SeqAppend, SeqContains, SeqDrop, SeqExp, SeqIndex, SeqLength, SeqTake, SeqUpdate, Seqn, SetExp, Stmt, Type, UnExp, Unfold, Unfolding, While}
+import viper.silver.ast._
 import viper.silver.inference.v3.ast._
-import viper.silver.inference.v3.knowledge.{Assignment, DirectPermissionMask, FoldedPermissionMask, Heap, KnowledgeBase, Potential}
-import viper.silver.verifier.{Failure, Success, Verifier}
+import viper.silver.inference.v3.knowledge._
+import viper.silver.verifier.Verifier
 
-import scala.annotation.tailrec
 import scala.collection.mutable
 
 trait Requirement {
@@ -55,15 +54,72 @@ case class MethodInference(engine: ReasoningEngine,
                            knowledge: mutable.HashMap[Ident, Map[Seq[Term], KnowledgeBase]],
                            methSpec: mutable.HashMap[String, (Seq[LogicTerm], Seq[LogicTerm])],
                            injections: mutable.HashMap[Injection, Seq[RefoldingStrategy]]) {
-  def merge(incoming: Seq[KnowledgeBase]): KnowledgeBase = {
-    // TODO: maybe add a dedicated merge line which is takes care of this and makes merging more reliable
 
-    println(s"merging:\n${incoming.map(k => k.pretty()).mkString(", ")}")
+  def attemptMagicWandConstruction(kb: KnowledgeBase, pred: PredInstAccTerm): Unit = {
+    println("%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%")
+    val predDef = this.defs(pred.pred.name)
+    val body = predDef.instantiate(pred.pred)
+    // locate the stuff that is not satisfied yet
+    // TODO: extend the refolding strategy to include
+    //              package: sub parts are the steps required to package this magic wand
+    //              apply: single argument which contains a magic wand
+    //           maybe use the verifier to get information about the parts that are not satisfied yet?
+    //           maybe just check from the current scope and call "findRefoldingStrategy" + checking the pure info (or leave that out and say its a heuristic?!)
 
-    // TODO: fix this
-    incoming.head
+
+    // TODO: maybe extend with potential and pure parts
+    val rawFolded = PredicateCollector.collectFoldedPredicates(this.engine, body, kb)
+    val rawDirect = PredicateCollector.collectDirectPredicates(this.engine, body, kb)
+//    val rawStripped = PredicateCollector.stripToPure(this.engine, body, kb)
+//    val rawPartial = PredicateCollector.collectPotSatImpls(this.eng ine, body, kb)
+
+    val (kb1, folded) = normalizeFoldedRequirements(kb, rawFolded)
+    val (kb2, direct) = normalizeDirectRequirements(kb1, rawDirect)
+
+    println(s"Folded Requirements: ${folded.map(_.pretty()).mkString("   &   ")}")
+    println(s"Direct Requirements: ${direct.map(_.pretty()).mkString("   &   ")}")
+    println("Knowledge Base:")
+    println(kb2.pretty())
+//    val (kb3, stripped) = normalizeLogicTerm(kb2, rawStripped)
+//    val (kb4, partial) = normalizePotentialRequirements(kb3, rawPartial)
+
+//    println("CHECKING FOLDED:")
+    val missingFolded = folded.filter(f => kb2.findRefoldingStrategy(this.engine, this.defs, f).isEmpty)
+    val missingDirect = direct.filter(d => kb2.findUnfoldingStrategy(this.engine, this.defs, d).isEmpty)
+
+    println(s"missing folded: ${missingFolded.map(_.pretty()).mkString(" & ")}")
+    println(s"missing direct: ${missingDirect.map(_.pretty()).mkString(" & ")}")
+    println("")
+    val bm = kb2.constructInfoBackMapping()
+    println(s"missing folded bm: ${missingFolded.map(v => applyBm(bm, v)).map(_.pretty()).mkString(" & ")}")
+    println(s"missing direct bm: ${missingDirect.map(v => applyBm(bm, v)).map(_.pretty()).mkString(" & ")}")
+    println("%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%")
+
+    /*
+      TODO: add injection point at the last position in if branches to allow different injections to take place on different paths
+          e.g.
+          if(x == null)
+          {
+            ....
+            injection 1
+          }
+          else
+          {
+            ....
+            if(something)
+            {
+              injection 2
+            }
+            else
+            {
+              injection 3
+            }
+            injection 4 -> only chose this when there is something other than a merge line before this path
+          }
+
+          when reconstructing the magic wand choose the injection corresponding to the path that it has come from (hope that its localized enough :) )
+    */
   }
-
 
   def collectRequiredFieldPermissions(term: Term): Set[PredFieldAccTerm] = {
     term match {
@@ -211,10 +267,21 @@ case class MethodInference(engine: ReasoningEngine,
     val mapping: Map[Term, Term] = kb.assignment.variables.map(a => a._2._1.toVarTerm(a._2._2) -> VarTerm(a._1, a._2._2)).toMap
     val replacements = collectReplacements(kb.info)
     val merged = mergeMappings(mapping, replacements)
-    println(merged.toSeq.map(e => e._1.pretty() + " ==> " + e._2.pretty()))
     val ts = MapTermSub(merged)
     val f = ((t: Term) => t.substitute(ts))
     FixedPoint.compute(term, f)
+  }
+
+  private def searchForPermissionFieldAdjustmentToGetPermissions(kb: KnowledgeBase, fa: PredFieldAccTerm, already: Term): Unit = {
+    val bmH = kb.constructBackMapping(this.currentMethod, useAllVariables = true)
+    val bmI = kb.constructInfoBackMapping()
+    val bm = bmH.followedBy(bmI)
+    val bmFA = FixedPoint.compute(fa, (t: Term) => t.substitute(bm))
+    val bmPerm = FixedPoint.compute(already, (t: Term) => t.substitute(bm))
+    println(s"back mapped field access: ${bmFA.pretty()}")
+    println(s"back mapped existing permission: ${bmPerm.pretty()}")
+    // TODO: search in folded predicates for this field and unfold if possible
+    // TODO: potentially propagate a constraint for the
   }
 
   def processLine(before: KnowledgeBase, line: Line): (Boolean, KnowledgeBase) = {
@@ -394,8 +461,8 @@ case class MethodInference(engine: ReasoningEngine,
           .filter(p => !kb.hasEnoughPermissions(this.engine, p._1.perm, p._2))
           .foreach(p => propagateBackFieldPermReq(ln, p._1, p._2))
 
-        val (a2, refBeforeAssign) = before.assignment.lookup(variable.name, variable.typ)
-        val normKb = before.withAssignment(a2)
+        val (a2, refBeforeAssign) = kb.assignment.lookup(variable.name, variable.typ)
+        val normKb = kb.withAssignment(a2)
         val (kbN, refN, _, infoN) = TermNormalization.computeNormalizedValueRef(normKb, normKb.assignment.rc, value)
         val ua = kbN.assignment.assign(variable.name, refN, variable.typ)
 
@@ -409,6 +476,7 @@ case class MethodInference(engine: ReasoningEngine,
           kbN.folded.substitute(ts),
           subbedInfo.and(infoN),
           kbN.partial.substitute(ts),
+          kbN.mwm.substitute(ts),
           kbN.fieldTypes
         )
         (false, resKb)
@@ -464,7 +532,11 @@ case class MethodInference(engine: ReasoningEngine,
               (true, kb)
             }
             else {
-              println(stillMissingTarget)
+              println(s"STILL MISSING FOR TARGET: ${stillMissingTarget}")
+              stillMissingTarget.foreach(m => {
+                searchForPermissionFieldAdjustmentToGetPermissions(kb, m._1, m._2)
+              })
+
               val someSuccessWithDirectPropTarget = stillMissingTarget.map(p => propagateBackFieldPermReq(ln, p._1, p._2))
                 .exists(a => a)
 
@@ -487,6 +559,7 @@ case class MethodInference(engine: ReasoningEngine,
                   kb.folded.substitute(ts),
                   kb.info.substitute(ts).asInstanceOf[LogicTerm].and(infoN).and(infoS),
                   kb.partial.substitute(ts),
+                  kbN.mwm.substitute(ts),
                   kb.fieldTypes
                 )
 
@@ -503,20 +576,23 @@ case class MethodInference(engine: ReasoningEngine,
         val rawDirect = PredicateCollector.collectDirectPredicates(this.engine, exp, before)
         val rawStripped = PredicateCollector.stripToPure(this.engine, exp, before)
         val rawPartial = PredicateCollector.collectPotSatImpls(this.engine, exp, before)
+        val rawMagic = PredicateCollector.collectBaguettes(this.engine, exp, before)
 
         val (kb1, folded) = normalizeFoldedRequirements(before, rawFolded)
         val (kb2, direct) = normalizeDirectRequirements(kb1, rawDirect)
         val (kb3, stripped) = normalizeLogicTerm(kb2, rawStripped)
-        val (kb4, partial) = normalizePotentialRequirements(kb3, rawPartial)
+        val (kb33, partial) = normalizePotentialRequirements(kb3, rawPartial)
+        val (kb4, baguettes) = normalizeBaguetteRequirements(kb33, rawMagic)
 
 
         // TODO: normalize the folded, direct, partial and stripped (EVERYWHERE)
-        val resKb = kb4.update((a, h, d, f, fac, pot) => {
+        val resKb = kb4.update((a, h, d, f, fac, pot, mag) => {
           val ud = direct.foldLeft(d)((a, b) => a.inhale(b))
           val uf = folded.foldLeft(f)((a, b) => a.inhale(b))
           val ufac = fac.and(stripped)
           val up = pot.inhale(partial)
-          (a, h, ud, uf, ufac, up)
+          val um = baguettes.foldLeft(mag)((a, b) => a.addWand(b))
+          (a, h, ud, uf, ufac, up, um)
         })
 
         val cleanedKb = cleanPotentialWithCurrentKnowledge(resKb)
@@ -530,7 +606,7 @@ case class MethodInference(engine: ReasoningEngine,
         val ua = a2.assign(target.name, valRef, target.typ)
 
         val afterAssign = KnowledgeBase(
-          before.path, ua, before.heap, before.direct, before.folded, before.info, before.partial, before.fieldTypes
+          before.path, ua, before.heap, before.direct, before.folded, before.info, before.partial, before.mwm, before.fieldTypes
         )
 
         // substitute the old variable and inhale the new permissions
@@ -578,7 +654,7 @@ case class MethodInference(engine: ReasoningEngine,
 
   private def normalizeFoldedRequirements(before: KnowledgeBase, reqs: Seq[PredInstAccTerm]): (KnowledgeBase, Seq[PredInstAccTerm]) = {
     reqs.foldLeft((before, Seq[PredInstAccTerm]()))((acc, r) => {
-      val (resKb, args) = normalizeTermList(before, r.pred.args)
+      val (resKb, args) = normalizeTermList(acc._1, r.pred.args)
       val (kb, perm) = normalizeTerm(resKb, r.perm)
       val pred = PredInstAccTerm(PredInst(r.pred.name, args), perm)
       (kb, acc._2 ++ Seq(pred))
@@ -599,6 +675,18 @@ case class MethodInference(engine: ReasoningEngine,
       )
       (kb, acc._2 ++ Seq(pred))
     })
+  }
+
+  private def normalizeBaguetteRequirements(before: KnowledgeBase, reqs: Seq[BaguetteMagic]): (KnowledgeBase, Seq[BaguetteMagic]) = {
+    reqs.foldLeft((before, Seq[BaguetteMagic]()))((acc, f) => {
+      val (kb1, dirPrem) = normalizeDirectRequirements(before, f.directPrem.toSeq)
+      val (kb2, folPrem) = normalizeFoldedRequirements(kb1, f.foldedPrem.toSeq)
+      val (kb3, dirCons) = normalizeDirectRequirements(kb2, f.directCons.toSeq)
+      val (kb4, folCons) = normalizeFoldedRequirements(kb3, f.foldedCons.toSeq)
+
+      (kb4, acc._2 ++ Seq(BaguetteMagic(dirPrem.toSet, folPrem.toSet, dirCons.toSet, folCons.toSet)))
+    })
+
   }
 
   private def normalizePotentialRequirements(before: KnowledgeBase, reqs: Seq[ImplTerm]): (KnowledgeBase, Seq[ImplTerm]) = {
@@ -908,7 +996,7 @@ case class MethodInference(engine: ReasoningEngine,
 
       // generate an initial assignment based of the arguments of the method
       val initAssignment = meth.args.foldLeft(new Assignment(counter))((a, f) => a.assign(f._1, counter.freshValRef(), f._2))
-      val empty = KnowledgeBase(Seq(), initAssignment, new Heap(counter), new DirectPermissionMask(), new FoldedPermissionMask(), BoolTerm(true), new Potential(), fieldTypes)
+      val empty = KnowledgeBase(Seq(), initAssignment, new Heap(counter), new DirectPermissionMask(), new FoldedPermissionMask(), BoolTerm(true), new Potential(), new MagicWandManager(), fieldTypes)
 
       // inhale the preconditions
       // TODO: fix the restart position
@@ -930,7 +1018,7 @@ case class MethodInference(engine: ReasoningEngine,
                 case BranchLine(ln, pre, cond, thn, els) => {
                   val assumption = if (thn == current) cond else NotTerm(cond)
                   this.knowledge(i).values
-                    .map(k => k.withPath(ln, assumption).withInfo(assumption))
+                    .map(k => /* cleanPotentialWithCurrentKnowledge */ (k.withPath(ln, assumption).withInfo(assumption)))
                 }
                 case _ => this.knowledge(i).values
               }
@@ -948,14 +1036,34 @@ case class MethodInference(engine: ReasoningEngine,
             restarting = shouldRestart
 
 
-            println(s":::::::::::::::: AFTER :::::::::::::::::")
+            println(s":::::::::::::::: AFTER ${current.pretty()} :::::::::::::::::")
             println(after.pretty())
 
 
             setKnowledgeBase(current, after)
 
+            if(true){
+              val rc = RefCounter(Counter(0))
+              val kb0 = new KnowledgeBase(after.fieldTypes, rc)
+              val rawPart = PredInstAccTerm(PredInst("Part", Seq(VarTerm("x", Ref))), PermAmount.WRITE)
+              val (kb1, parts) = normalizeFoldedRequirements(kb0, Seq(rawPart))
+              val missing = PredInstAccTerm(PredInst("Missing", Seq(VarTerm("x", Ref))), PermAmount.WRITE)
+              val dummy = kb1
+                .update((a, h, d, f, i, p) => (a, h, d, f.inhale(parts.head), i, p))
+              val desired = PredInstAccTerm(PredInst("Wand", Seq(VarTerm("x", Ref))), PermAmount.WRITE)
+              attemptMagicWandConstruction(dummy, desired)
+            }
+
             if (restarting) {
               // TODO: fix the restarting logic
+//              println("KB WHEN RESTARTING:")
+//              println(after.pretty())
+              dumpBeautifiedKbs()
+              println("INJECTIONS WHEN RESTARTING:")
+              this.injections.foreach(e => {
+                println(e._1)
+                e._2.foreach(s => println(s.pretty().indent(2)))
+              })
               throw new IllegalArgumentException(s"RESTARTING :/ ${line.pretty()}")
             }
           }
@@ -991,19 +1099,54 @@ case class MethodInference(engine: ReasoningEngine,
       }
 
       if (true) {
-        println("::::::::::::::::::::::::::::::::: KB DUMP :::::::::::::::::::::::::::::::::")
-        this.knowledge.toSeq
-          .sortBy(v => v._1.value)
-          .foreach(e => {
-            println(s"Identifier: ${e._1.pretty()}")
-            e._2.foreach(k => {
-              println(s"Path: ${k._1.map(_.pretty()).mkString("  &&  ")}".indent(2))
-              println(k._2.pretty().indent(4))
-            })
-          })
-        println(":::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::")
+        dumpBeautifiedKbs()
+//        dumpRawKbs()
       }
     }
+  }
+
+  private def applyBm(bm: TermSub, term: Term): Term = {
+    FixedPoint.compute(term, (s: Term) => s.substitute(bm))
+  }
+
+  private def dumpBeautifiedKbs(): Unit = {
+    println("::::::::::::::::::::::::::::::::: KB DUMP (BEAUTIFIED) :::::::::::::::::::::::::::::::::")
+    this.knowledge.toSeq
+      .sortBy(v => v._1.value)
+      .foreach(e => {
+        println(s"Identifier: ${e._1.pretty()}")
+        e._2.foreach(k => {
+          println(s"Path: ${k._1.map(_.pretty()).mkString("  &&  ")}".indent(2))
+          val kb = k._2
+          println(kb.pretty())
+          val bmH = kb.constructBackMapping(this.currentMethod, useAllVariables = true)
+          val bmI = kb.constructInfoBackMapping()
+          val bm = bmH.followedBy(bmI)
+          println("direct beautiful:")
+          kb.direct.permissions.foreach(p => {
+            println(s"  ${applyBm(bm, p._1).pretty()}: ${TermRewriter.simplify(applyBm(bm, p._2)).pretty()}")
+          })
+          println("folded beautiful:")
+          kb.folded.permissions.foreach(p => {
+            println(s"  ${PredInst(p._1.name, p._1.args.map(a => applyBm(bm, a))).pretty()}: ${TermRewriter.simplify(applyBm(bm, p._2)).pretty()}")
+          })
+        })
+      })
+    println(":::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::")
+  }
+
+  private def dumpRawKbs(): Unit = {
+    println("::::::::::::::::::::::::::::::::: KB DUMP :::::::::::::::::::::::::::::::::")
+    this.knowledge.toSeq
+      .sortBy(v => v._1.value)
+      .foreach(e => {
+        println(s"Identifier: ${e._1.pretty()}")
+        e._2.foreach(k => {
+          println(s"Path: ${k._1.map(_.pretty()).mkString("  &&  ")}".indent(2))
+          println(k._2.pretty().indent(4))
+        })
+      })
+    println(":::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::")
   }
 
   // TODO: add dummy line that can be used by the merge line to similarize the knowledge bases as far as possible
@@ -1207,3 +1350,9 @@ case class Inference(verifier: Verifier, defs: Map[String, PredDef], reps: Map[S
   }
 }
 
+
+
+object MagicWanderWonder
+{
+
+}

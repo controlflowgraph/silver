@@ -66,6 +66,19 @@ object InternalFormTranslator {
     }
   }
 
+  private def extractMagicWandParts(term: Term): (Set[PredFieldAccTerm], Set[PredInstAccTerm]) = {
+    term match {
+      case AndTerm(a, b) => {
+        val (dirA, folA) = extractMagicWandParts(a)
+        val (dirB, folB) = extractMagicWandParts(b)
+        (dirA.union(dirB), folA.union(folB))
+      }
+      case p: PredFieldAccTerm => (Set(p), Set())
+      case p: PredInstAccTerm => (Set(), Set(p))
+      case _ => (Set(), Set())
+    }
+  }
+
   def expToLogicTerm(exp: Exp): LogicTerm = {
     exp match {
       case lit: BoolLit => BoolTerm(lit.value)
@@ -88,6 +101,11 @@ object InternalFormTranslator {
       case acc: PredicateAccessPredicate => PredInstAccTerm(PredInst(acc.loc.predicateName, acc.loc.args.map(expToTerm)), expToTerm(acc.perm))
       // TODO: support unfolding instructions
       case uf: Unfolding => BoolTerm(true)
+      case MagicWand(left, right) => {
+        val (dirPrem, folPrem) = extractMagicWandParts(expToLogicTerm(left))
+        val (dirCons, folCons) = extractMagicWandParts(expToLogicTerm(right))
+        BaguetteMagic(dirPrem, folPrem, dirCons, folCons)
+      }
       case v => throw new IllegalArgumentException(s"Unable to transform ${v.getClass.getCanonicalName} to logic term! ${exp}")
     }
   }

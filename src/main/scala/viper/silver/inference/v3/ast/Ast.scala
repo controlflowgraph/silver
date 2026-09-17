@@ -1,6 +1,7 @@
 package viper.silver.inference.v3.ast
 
-import viper.silver.ast.{Add, And, BoolLit, EqCmp, Exp, Field, FieldAccess, FieldAccessPredicate, FractionalPerm, GeCmp, GtCmp, Implies, IntLit, IntPermMul, LeCmp, LocalVar, LtCmp, Minus, Mul, NeCmp, Not, NullLit, Or, PermAdd, PermMul, PredicateAccess, PredicateAccessPredicate, Sub, Type}
+import org.apache.commons.io.filefilter.PrefixFileFilter
+import viper.silver.ast.{Add, And, BoolLit, EqCmp, Exp, Field, FieldAccess, FieldAccessPredicate, FractionalPerm, GeCmp, GtCmp, Implies, IntLit, IntPermMul, LeCmp, LocalVar, LtCmp, MagicWand, Minus, Mul, NeCmp, Not, NullLit, Or, PermAdd, PermMul, PredicateAccess, PredicateAccessPredicate, Sub, Type}
 import viper.silver.inference.v3.FixedPoint
 
 trait TermSub {
@@ -483,6 +484,16 @@ case class PredInstAccTerm(pred: PredInst, perm: Term) extends LogicTerm {
     PredicateAccess(this.pred.args.map(a => a.toExp()), this.pred.name)(),
     Some(this.perm.toExp())
   )()
+
+  def rewrite(ts: TermSub): PredInstAccTerm = {
+    PredInstAccTerm(
+      PredInst(
+        this.pred.name,
+        this.pred.args.map(a => a.substitute(ts))
+      ),
+      this.perm.substitute(ts)
+    )
+  }
 }
 
 case class PredFieldAccTerm(exp: FieldAccTerm, perm: Term) extends LogicTerm {
@@ -509,6 +520,72 @@ case class PredFieldAccTerm(exp: FieldAccTerm, perm: Term) extends LogicTerm {
     this.exp.toExp(),
     Some(this.perm.toExp())
   )()
+
+  def rewrite(ts: TermSub): PredFieldAccTerm = {
+    PredFieldAccTerm(
+      FieldAccTerm(
+        this.exp.src.substitute(ts),
+        this.exp.field,
+        this.exp.typ
+      ), this.perm.substitute(ts))
+  }
+}
+
+// TODO: the magic wand could be generalized?!
+//       - more general precondition (instead of sets of direct/folded permissions)
+//       - more general body instead of explicitly forcing a single PredInstAccTerm
+case class BaguetteMagic(directPrem: Set[PredFieldAccTerm], foldedPrem: Set[PredInstAccTerm], directCons: Set[PredFieldAccTerm], foldedCons: Set[PredInstAccTerm]) extends LogicTerm {
+
+  private def premTerms(): Set[Term] = {
+    this.directPrem.asInstanceOf[Set[Term]].union(this.foldedPrem.asInstanceOf[Set[Term]])
+  }
+
+  private def consTerms(): Set[Term] = {
+    this.directCons.asInstanceOf[Set[Term]].union(this.foldedCons.asInstanceOf[Set[Term]])
+  }
+
+  def pretty(): String = {
+    val cond = premTerms().map(_.pretty()).mkString(" && ")
+    val cons = consTerms().map(_.pretty()).mkString(" && ")
+    s"${cond} --* ${cons}"
+  }
+
+  def rewrite(ts: TermSub) : BaguetteMagic = {
+    val dirsPrem = this.directPrem.map(d => d.rewrite(ts))
+    val folsPrem = this.foldedPrem.map(f => f.rewrite(ts))
+    val dirsCons = this.directCons.map(d => d.rewrite(ts))
+    val folsCons = this.foldedCons.map(f => f.rewrite(ts))
+    BaguetteMagic(dirsPrem, folsPrem, dirsCons, folsCons)
+  }
+
+  def scale(f: Term): BaguetteMagic = {
+    val dirsPrem = this.directPrem.map(d => d.scale(f))
+    val folsPrem = this.foldedPrem.map(d => d.scale(f))
+    val dirsCons = this.directCons.map(d => d.scale(f))
+    val folsCons = this.foldedCons.map(f => f.scale(f))
+    BaguetteMagic(dirsPrem, folsPrem, dirsCons, folsCons)
+  }
+
+
+  override def substitute(ts: TermSub): Term = {
+    val dirsPrem = this.directPrem.map(d => d.substitute(ts).asInstanceOf[PredFieldAccTerm])
+    val folsPrem = this.foldedPrem.map(f => f.substitute(ts).asInstanceOf[PredInstAccTerm])
+    val dirsCons = this.directCons.map(d => d.substitute(ts).asInstanceOf[PredFieldAccTerm])
+    val folsCons = this.foldedCons.map(f => f.substitute(ts).asInstanceOf[PredInstAccTerm])
+    BaguetteMagic(dirsPrem, folsPrem, dirsCons, folsCons)
+  }
+
+  override def toExp(): Exp = {
+    val prem = premTerms()
+      .map(v => v.toExp())
+      .reduceLeftOption((a, b) => And(a, b)())
+      .getOrElse(BoolLit(b = true)())
+    val cons = consTerms()
+      .map(v => v.toExp())
+      .reduceLeftOption((a, b) => And(a, b)())
+      .getOrElse(BoolLit(b = true)())
+    MagicWand(prem, cons)()
+  }
 }
 
 object TermRewriter {
@@ -540,16 +617,28 @@ object TermRewriter {
     }
   )
 
-  private def addZeroLeftSimp: Seq[TermSub] = Seq(
+  private def addZeroSimp: Seq[TermSub] = Seq(
     FuncTermSub {
       case AddTerm(PermFracTerm(IntTerm(a), _), d) if a == BigInt.int2bigInt(0) => d
+      case AddTerm(d, PermFracTerm(IntTerm(a), _)) if a == BigInt.int2bigInt(0) => d
       case c => c
     }
   )
 
-  private def addZeroRightSimp: Seq[TermSub] = Seq(
+  private def mulOneSimp: Seq[TermSub] = Seq(
     FuncTermSub {
-      case AddTerm(d, PermFracTerm(IntTerm(a), _)) if a == BigInt.int2bigInt(0) => d
+      case MulTerm(PermFracTerm(IntTerm(a), IntTerm(b)), d) if a == BigInt.int2bigInt(1) && b == BigInt.int2bigInt(1) => d
+      case MulTerm(d, PermFracTerm(IntTerm(a), IntTerm(b))) if a == BigInt.int2bigInt(1) && b == BigInt.int2bigInt(1) => d
+      case c => c
+    }
+  )
+
+  private def normConstFracTerm: Seq[TermSub] = Seq(
+    FuncTermSub {
+      case PermFracTerm(IntTerm(a), IntTerm(b)) if !(a.gcd(b).equals(BigInt.int2bigInt(1))) => {
+        val g = a.gcd(b)
+        PermFracTerm(IntTerm(a / g), IntTerm(b / g))
+      }
       case c => c
     }
   )
@@ -588,11 +677,21 @@ object TermRewriter {
     }
   )
 
+  private def addNegSelf: Seq[TermSub] = Seq(
+    FuncTermSub {
+      case AddTerm(a, NegTerm(b)) if a.equals(b) => PermFracTerm(IntTerm(BigInt.int2bigInt(0)), IntTerm(BigInt.int2bigInt(1)))
+      case AddTerm(NegTerm(b), a) if a.equals(b) => PermFracTerm(IntTerm(BigInt.int2bigInt(0)), IntTerm(BigInt.int2bigInt(1)))
+      case c => c
+    }
+  )
+
   def simplify(t: Term): Term = {
 
     val subs = Seq(
-      addZeroLeftSimp,
-      addZeroRightSimp,
+      addNegSelf,
+      addZeroSimp,
+      mulOneSimp,
+      normConstFracTerm,
       constAddSimp,
       constMulSimp,
       constSubSimp,

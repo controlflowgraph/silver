@@ -1,6 +1,6 @@
 package viper.silver.inference.v3
 
-import viper.silver.inference.v3.ast.{AndTerm, BoolTerm, EqCmpTerm, GreaterCmpTerm, GreaterEqCmpTerm, ImplTerm, LessCmpTerm, LessEqCmpTerm, LogicTerm, NotEqCmpTerm, NotTerm, OrTerm, PredFieldAccTerm, PredInstAccTerm, VarTerm}
+import viper.silver.inference.v3.ast.{AndTerm, BaguetteMagic, BoolTerm, EqCmpTerm, GreaterCmpTerm, GreaterEqCmpTerm, ImplTerm, LessCmpTerm, LessEqCmpTerm, LogicTerm, NotEqCmpTerm, NotTerm, OrTerm, PredFieldAccTerm, PredInstAccTerm, VarTerm}
 import viper.silver.inference.v3.knowledge.KnowledgeBase
 
 object PredicateCollector {
@@ -37,6 +37,7 @@ object PredicateCollector {
         }
         Seq()
       }
+      case _: BaguetteMagic => Seq()
       case _: PredFieldAccTerm => Seq()
       case _: PredInstAccTerm => Seq()
       case _: VarTerm => Seq()
@@ -80,6 +81,7 @@ object PredicateCollector {
         }
         Seq()
       }
+      case _: BaguetteMagic => Seq()
       case p: PredFieldAccTerm => Seq(p)
       case _: PredInstAccTerm => Seq()
       case _: VarTerm => Seq()
@@ -113,6 +115,7 @@ object PredicateCollector {
         OrTerm(dnfA, dnfB)
       case _: PredFieldAccTerm => BoolTerm(true)
       case _: PredInstAccTerm => BoolTerm(true)
+      case _: BaguetteMagic => BoolTerm(true)
       case v: VarTerm => EqCmpTerm(v, BoolTerm(true))
       case _ =>
         throw new IllegalArgumentException(s"Unable to extract folded predicates from logic term ${term.getClass.getCanonicalName}")
@@ -152,9 +155,50 @@ object PredicateCollector {
         Seq()
       case _: PredFieldAccTerm => Seq()
       case p: PredInstAccTerm => Seq(p)
+      case _: BaguetteMagic => Seq()
       case _: VarTerm => Seq()
       case _ =>
         throw new IllegalArgumentException(s"Unable to extract folded predicates from logic term ${term.getClass.getCanonicalName}")
     }
   }
+
+  def collectBaguettes(engine: ReasoningEngine, term: LogicTerm, kb: KnowledgeBase): Seq[BaguetteMagic] = {
+    term match {
+      case _: BoolTerm => Seq()
+      case _: EqCmpTerm => Seq()
+      case _: GreaterCmpTerm => Seq()
+      case _: GreaterEqCmpTerm => Seq()
+      case _: LessCmpTerm => Seq()
+      case _: LessEqCmpTerm => Seq()
+      case _: NotEqCmpTerm => Seq()
+      case AndTerm(a, b) => collectBaguettes(engine, a, kb) ++ collectBaguettes(engine, b, kb)
+      case ImplTerm(prem, cons) =>
+        if (engine.prove(kb, prem) == Sat) collectBaguettes(engine, cons, kb)
+        else Seq()
+      case NotTerm(t) =>
+        val included = collectBaguettes(engine, t, kb)
+        if (included.nonEmpty) {
+          throw new IllegalArgumentException("Predicates within negation!")
+        }
+        Seq()
+      case OrTerm(a, b) =>
+        // based on the assumption that viper does not support disjunctions with resource access stuff
+        val includedA = collectBaguettes(engine, a, kb)
+        if (includedA.nonEmpty) {
+          throw new IllegalArgumentException("Predicates within disjunction!")
+        }
+        val includedB = collectBaguettes(engine, b, kb)
+        if (includedB.nonEmpty) {
+          throw new IllegalArgumentException("Predicates within disjunction!")
+        }
+        Seq()
+      case _: PredFieldAccTerm => Seq()
+      case _: PredInstAccTerm => Seq()
+      case p: BaguetteMagic => Seq(p)
+      case _: VarTerm => Seq()
+      case _ =>
+        throw new IllegalArgumentException(s"Unable to extract folded predicates from logic term ${term.getClass.getCanonicalName}")
+    }
+  }
+
 }
