@@ -783,7 +783,7 @@ object FastPrettyPrinter extends FastPrettyPrinterBase with BracketPrettyPrinter
       case NullLit() => value(null)
       case AbstractLocalVar(n) => n
       case FieldAccess(rcv, field) =>
-        show(rcv) <> "." <> field.name <> "(: " <> show(field.typ) <> ")"
+        show(rcv) <> "." <> field.name // <> "(: " <> show(field.typ) <> ")"
       case PredicateAccess(params, predicateName) =>
         text(predicateName) <> parens(ssep(params map show, group(char (',') <> line)))
       case Unfolding(acc, exp) =>
