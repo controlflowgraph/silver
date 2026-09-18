@@ -311,14 +311,6 @@ object InternalFormTranslator {
 
     val stopIdent = transform._2.last
 
-    println(s"REPRESENTATION:")
-    println(rep.pretty())
-
-    if(true)
-    {
-      throw new IllegalArgumentException("STOP")
-    }
-
     InternalMethod(m.name, args, res, pres, posts, start, stopIdent, rep, extendedBody, finalInj)
   }
 }
