@@ -4,26 +4,28 @@ import viper.silver.ast._
 import viper.silver.inference.v3.ast._
 
 object InternalFormTranslator {
-  def transformSeqnToInternalForm(rep: InternalRepresentation, prev: Ident, defs: Map[String, PredDef], seq: Seqn, inj: Option[Injection]): (Seqn, Ident, Ident) = {
-    val transformed: (Seq[Stmt], Ident, Seq[Ident]) = seq.ss.foldLeft((Seq[Stmt](), prev, Seq[Ident]()))((acc, s) => {
+  def transformSeqnToInternalForm(rep: InternalRepresentation, prev: Ident, defs: Map[String, PredDef], seq: Seqn, inj: Option[Injection]): (Seqn, Seq[Ident]) = {
+    val initial = (Seq[Stmt](), prev, Seq[Ident]())
+    val transformed: (Seq[Stmt], Ident, Seq[Ident]) = seq.ss.foldLeft(initial)((acc, s) => {
       val res = translateStmtToInternalForm(rep, acc._2, defs, s)
-
-      (acc._1 ++ Seq(res._1), res._2, acc._3 ++ Seq(res._3))
+      (acc._1 ++ Seq(res._1), res._2.last, acc._3 ++ res._2)
     })
+
     val injection = inj match {
       case Some(value) => Seq(value)
       case None => Seq()
     }
+
     if(transformed._1.isEmpty){
       val ln = rep.freshIdent()
       val line = AssumeLine(ln, BoolTerm(true))
 
       rep.introduce(prev, line)
 
-      (Seqn(injection, seq.scopedSeqnDeclarations)(), ln, ln)
+      (Seqn(injection, seq.scopedSeqnDeclarations)(), Seq(ln))
     }
     else{
-      (Seqn(transformed._1 ++ injection, seq.scopedSeqnDeclarations)(), transformed._3.head, transformed._3.last)
+      (Seqn(transformed._1 ++ injection, seq.scopedSeqnDeclarations)(), transformed._3)
     }
   }
 
@@ -110,7 +112,7 @@ object InternalFormTranslator {
     }
   }
 
-  def translateStmtToInternalForm(rep: InternalRepresentation, prev: Ident, defs: Map[String, PredDef], stmt: Stmt): (Stmt, Ident, Ident) = {
+  def translateStmtToInternalForm(rep: InternalRepresentation, prev: Ident, defs: Map[String, PredDef], stmt: Stmt): (Stmt, Seq[Ident]) = {
     stmt match {
       case NewStmt(lhs, fields) => {
 
@@ -126,7 +128,7 @@ object InternalFormTranslator {
         rep.addLine(line)
         rep.addConnection(prev, ln)
 
-        (stmt, ln, ln)
+        (stmt, Seq(ln))
       }
       case assign: AbstractAssign => assign match {
         case LocalVarAssign(lhs, rhs) => {
@@ -141,7 +143,7 @@ object InternalFormTranslator {
 
           rep.introduce(prev, line)
 
-          (Seqn(Seq(inj, stmt), Seq())(), ln, ln)
+          (Seqn(Seq(inj, stmt), Seq())(), Seq(ln))
         }
         case FieldAssign(lhs, rhs) => {
           val inj = freshInjection()
@@ -155,7 +157,7 @@ object InternalFormTranslator {
 
           rep.introduce(prev, line)
 
-          (Seqn(Seq(inj, stmt), Seq())(), ln, ln)
+          (Seqn(Seq(inj, stmt), Seq())(), Seq(ln))
         }
       }
       case MethodCall(methodName, args, targets) => {
@@ -165,7 +167,7 @@ object InternalFormTranslator {
 
         rep.introduce(prev, line)
 
-        (Seqn(Seq(inj, stmt), Seq())(), ln, ln)
+        (Seqn(Seq(inj, stmt), Seq())(), Seq(ln))
       }
       case Exhale(exp) => {
         val inj = freshInjection()
@@ -174,13 +176,13 @@ object InternalFormTranslator {
 
         rep.introduce(prev, line)
 
-        (Seqn(Seq(inj, stmt), Seq())(), ln, ln)
+        (Seqn(Seq(inj, stmt), Seq())(), Seq(ln))
       }
       case Inhale(exp) => {
         val ln = rep.freshIdent()
         val line = InhaleLine(ln, expToLogicTerm(exp))
         rep.introduce(prev, line)
-        (stmt, ln, ln)
+        (stmt, Seq(ln))
       }
       case Assert(exp) => {
         val ln = rep.freshIdent()
@@ -189,13 +191,13 @@ object InternalFormTranslator {
 
         rep.introduce(prev, line)
 
-        (Seqn(Seq(inj, stmt), Seq())(), ln, ln)
+        (Seqn(Seq(inj, stmt), Seq())(), Seq(ln))
       }
       case Assume(exp) => {
         val ln = rep.freshIdent()
         val line = AssumeLine(ln, expToLogicTerm(exp))
         rep.introduce(prev, line)
-        (stmt, ln, ln)
+        (stmt, Seq(ln))
       }
       case Fold(acc) => {
         val inj = freshInjection()
@@ -213,7 +215,7 @@ object InternalFormTranslator {
         rep.introduce(exLn, in)
 
 
-        (Seqn(Seq(inj, stmt), Seq())(), exLn, inLn)
+        (Seqn(Seq(inj, stmt), Seq())(), Seq(exLn, inLn))
       }
       case Unfold(acc) => {
         val inj = freshInjection()
@@ -231,7 +233,7 @@ object InternalFormTranslator {
         rep.introduce(prev, ex)
         rep.introduce(exLn, in)
 
-        (Seqn(Seq(inj, stmt), Seq())(), exLn, inLn)
+        (Seqn(Seq(inj, stmt), Seq())(), Seq(exLn, inLn))
       }
 
       case seq: Seqn => transformSeqnToInternalForm(rep, prev, defs, seq, None)
@@ -253,8 +255,8 @@ object InternalFormTranslator {
           ln,
           inj,
           translatedCondition,
-          thnTrans._2,
-          elsTrans._2
+          thnTrans._2.head,
+          elsTrans._2.head
         )
 
         rep.introduce(prev, line)
@@ -262,8 +264,8 @@ object InternalFormTranslator {
         val transIf = If(cond, thnTrans._1, elsTrans._1)(i.pos, i.info, i.errT)
 
         // introduce merge line
-        val lastThn = thnTrans._3
-        val lastEls = elsTrans._3
+        val lastThn = thnTrans._2.last
+        val lastEls = elsTrans._2.last
 
         val merg = rep.freshIdent()
         val merging = MergeLine(merg, ln, postThnInj, postElsInj, lastThn, lastEls)
@@ -273,7 +275,7 @@ object InternalFormTranslator {
         rep.addConnection(lastEls, merg)
 
 
-        (Seqn(Seq(inj, transIf), Seq())(), ln, merg)
+        (Seqn(Seq(inj, transIf), Seq())(), Seq(ln, merg))
       }
     }
   }
@@ -307,7 +309,15 @@ object InternalFormTranslator {
     val body = transform._1
     val extendedBody = Seqn(body.ss ++ Seq(finalInj), body.scopedSeqnDeclarations)()
 
-    val stopIdent = transform._3
+    val stopIdent = transform._2.last
+
+    println(s"REPRESENTATION:")
+    println(rep.pretty())
+
+    if(true)
+    {
+      throw new IllegalArgumentException("STOP")
+    }
 
     InternalMethod(m.name, args, res, pres, posts, start, stopIdent, rep, extendedBody, finalInj)
   }
