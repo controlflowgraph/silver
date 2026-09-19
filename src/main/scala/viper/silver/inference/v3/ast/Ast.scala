@@ -1,7 +1,7 @@
 package viper.silver.inference.v3.ast
 
 import org.apache.commons.io.filefilter.PrefixFileFilter
-import viper.silver.ast.{Add, And, BoolLit, EqCmp, Exp, Field, FieldAccess, FieldAccessPredicate, FractionalPerm, GeCmp, GtCmp, Implies, IntLit, IntPermMul, LeCmp, LocalVar, LtCmp, MagicWand, Minus, Mul, NeCmp, Not, NullLit, Or, PermAdd, PermMul, PredicateAccess, PredicateAccessPredicate, Sub, Type}
+import viper.silver.ast.{Add, And, BoolLit, CurrentPerm, EqCmp, Exp, Field, FieldAccess, FieldAccessPredicate, FractionalPerm, GeCmp, GtCmp, Implies, IntLit, IntPermMul, LeCmp, LocalVar, LtCmp, MagicWand, Minus, Mul, NeCmp, Not, NullLit, Or, PermAdd, PermMinus, PermMul, PredicateAccess, PredicateAccessPredicate, Sub, Type}
 import viper.silver.inference.v3.FixedPoint
 
 trait TermSub {
@@ -81,6 +81,19 @@ case class IntTerm(value: BigInt) extends Term {
   override def toExp(): Exp = IntLit(this.value)()
 }
 
+case class FieldPermAmountTerm(e: FieldAccTerm) extends Term {
+  def substitute(ts: TermSub): Term = {
+    ts.apply(FieldPermAmountTerm(
+      this.e.substitute(ts).asInstanceOf[FieldAccTerm]))
+  }
+
+  def pretty(): String = {
+    s"perm(${this.e.pretty()})"
+  }
+
+  override def toExp(): Exp = CurrentPerm(this.e.toExp())()
+}
+
 case class PermFracTerm(a: Term, b: Term) extends Term {
   def substitute(ts: TermSub): Term = {
     ts.apply(PermFracTerm(
@@ -107,7 +120,15 @@ case class NegTerm(t: Term) extends Term {
 
   override def pretty(): String = s"-${this.t.pretty()}"
 
-  override def toExp(): Exp = Minus(this.t.toExp())()
+  override def toExp(): Exp = {
+    val exp = this.t.toExp()
+    if(exp.typ.equals(viper.silver.ast.Perm)){
+      PermMinus(exp)()
+    }
+    else{
+      Minus(exp)()
+    }
+  }
 }
 
 case class AddTerm(a: Term, b: Term) extends Term {

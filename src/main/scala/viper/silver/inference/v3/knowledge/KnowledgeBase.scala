@@ -35,10 +35,10 @@ case class KnowledgeBase(path: Seq[(Ident, Term)], assignment: Assignment, heap:
     while (open.nonEmpty) {
       val current = open.head
       if (this.heap.initialized._1.contains(current)) {
-        println(s"CURRENT: ${current}")
-        println(s"MAPPING:")
-        println(mapping.toSeq.map(e => e._1.pretty() + " ==> " + e._2.pretty()).mkString("\n"))
-        println("- sm")
+        //        println(s"CURRENT: ${current}")
+        //        println(s"MAPPING:")
+        //        println(mapping.toSeq.map(e => e._1.pretty() + " ==> " + e._2.pretty()).mkString("\n"))
+        //        println("- sm")
         val source = mapping(current.toVarTerm(Ref))
         val connections = this.heap.initialized._2.filter(v => v._1 == current)
         connections.foreach(c => {
@@ -174,15 +174,15 @@ case class KnowledgeBase(path: Seq[(Ident, Term)], assignment: Assignment, heap:
   def hasEnoughPermissions(engine: ReasoningEngine, amount: Term, higher: Term): Boolean = {
     val lowSimp = TermRewriter.simplify(amount)
     val highSimp = TermRewriter.simplify(higher)
-    println(s"CHECKING IF: ${amount.pretty()} <= ${higher.pretty()}")
+    //    println(s"CHECKING IF: ${amount.pretty()} <= ${higher.pretty()}")
     (lowSimp, highSimp) match {
       case (PermFracTerm(IntTerm(a), IntTerm(b)), PermFracTerm(IntTerm(c), IntTerm(d))) =>
-        println("CHECKING WITH CONSTANT!")
+        //        println("CHECKING WITH CONSTANT!")
         val fracA = a.doubleValue / b.doubleValue
         val fracB = c.doubleValue / d.doubleValue
         fracA <= fracB
       case _ =>
-        println("CHECKING WITH ENGINE!")
+        //        println("CHECKING WITH ENGINE!")
         val proofResult = engine.prove(this, LessEqCmpTerm(amount, higher))
         proofResult == Sat
     }
@@ -236,13 +236,18 @@ case class KnowledgeBase(path: Seq[(Ident, Term)], assignment: Assignment, heap:
 
   private def isNotZeroPerm(engine: ReasoningEngine, term: Term): Boolean = {
     val zero = PermFracTerm(IntTerm(BigInt.int2bigInt(0)), IntTerm(BigInt.int2bigInt(1)))
-    engine.prove(this, GreaterCmpTerm(term, zero)) == Sat
+    val res = engine.provePure(this, GreaterCmpTerm(term, zero)) == Sat
+    println(s"checking if: ${term.pretty()} > ${zero.pretty()}")
     //    engine.prove(this, EqCmpTerm(term, zero)) != UnSat
+    res
   }
 
   private def isClearlyZeroPerm(t: Term): Boolean = {
     TermRewriter.simplify(t) match {
-      case PermFracTerm(IntTerm(a), _) => a.equals(BigInt.int2bigInt(0))
+      case PermFracTerm(IntTerm(a), _) => {
+        println(s"${t.pretty()} is clearly zero from simp")
+        a.equals(BigInt.int2bigInt(0))
+      }
       case _ => false
     }
   }
@@ -270,7 +275,8 @@ case class KnowledgeBase(path: Seq[(Ident, Term)], assignment: Assignment, heap:
   }
 
   def findUnfoldingStrategyInBaguette(engine: ReasoningEngine, defs: Map[String, PredDef], mag: BaguetteMagic): Option[RefoldingStrategy] = {
-    findUnfoldingStrategyInPredicate(engine, defs, )
+    //    findUnfoldingStrategyInPredicate(engine, defs, )
+    None
   }
 
 
@@ -316,35 +322,38 @@ case class KnowledgeBase(path: Seq[(Ident, Term)], assignment: Assignment, heap:
     val ud = direct
       .map(d => PredFieldAccTerm(d.exp, MulTerm(d.perm, perm)))
       .foldLeft(ui)((a, b) => {
-        val (afterExpNorm, refE, typE, infoE) = TermNormalization.computeNormalizedValueRef(a, a.assignment.rc, b.exp.src)
-        val (afterPermNorm, refP, typP, infoP) = TermNormalization.computeNormalizedValueRef(afterExpNorm, a.assignment.rc, b.perm)
+        //        val (afterExpNorm, refE, typE, infoE) = TermNormalization.computeNormalizedValueRef(a, a.assignment.rc, b.exp.src)
+        //        val (afterPermNorm, refP, typP, infoP) = TermNormalization.computeNormalizedValueRef(afterExpNorm, a.assignment.rc, b.perm)
 
-        val varE = refE.toVarTerm(typE)
-        val varP = refP.toVarTerm(typP)
+        //        val varE = refE.toVarTerm(typE)
+        //        val varP = refP.toVarTerm(typP)
 
-        val uFA = PredFieldAccTerm(
-          FieldAccTerm(varE, b.exp.field, b.exp.typ),
-          varP
-        )
-        afterPermNorm.update((a, h, d, f, i, p) => {
-          (a, h, d.inhale(uFA), f, i.and(infoE).and(infoP), p)
+        //        val uFA = PredFieldAccTerm(
+        //          FieldAccTerm(varE, b.exp.field, b.exp.typ),
+        //          varP
+        //        )
+        a.update((a, h, d, f, i, p) => {
+          (a, h, d.inhale(b), f, i, p)
         })
       })
 
     val uf = folded
       .map(d => PredInstAccTerm(d.pred, MulTerm(d.perm, perm)))
       .foldLeft(ud)((a, b) => {
-        val (afterExpNorm, args, infoE) = TermNormalization.computeNormalizedTermList(a, a.assignment.rc, b.pred.args)
-        val (afterPermNorm, refP, typP, infoP) = TermNormalization.computeNormalizedValueRef(afterExpNorm, a.assignment.rc, b.perm)
-
-        val varP = refP.toVarTerm(typP)
-
-        val uFA = PredInstAccTerm(
-          PredInst(b.pred.name, args),
-          varP
-        )
-        afterPermNorm.update((a, h, d, f, i, p) => {
-          (a, h, d, f.inhale(uFA), i.and(infoE).and(infoP), p)
+        //        val (afterExpNorm, args, infoE) = TermNormalization.computeNormalizedTermList(a, a.assignment.rc, b.pred.args)
+        //        val (afterPermNorm, refP, typP, infoP) = TermNormalization.computeNormalizedValueRef(afterExpNorm, a.assignment.rc, b.perm)
+        //
+        //        val varP = refP.toVarTerm(typP)
+        //
+        //        val uFA = PredInstAccTerm(
+        //          PredInst(b.pred.name, args),
+        //          varP
+        //        )
+        //        afterPermNorm.update((a, h, d, f, i, p) => {
+        //          (a, h, d, f.inhale(uFA), i.and(infoE).and(infoP), p)
+        //        })
+        a.update((a, h, d, f, i, p) => {
+          (a, h, d, f.inhale(b), i, p)
         })
       })
 

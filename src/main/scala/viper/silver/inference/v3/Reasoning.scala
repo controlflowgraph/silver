@@ -18,6 +18,8 @@ object PotSat extends ProofResult {}
 
 trait ReasoningEngine {
   def prove(kb: KnowledgeBase, target: LogicTerm): ProofResult
+
+  def provePure(kb: KnowledgeBase, target: LogicTerm): ProofResult
 }
 
 case class ViperReasoningEngine(verifier: Verifier, program: Program) extends ReasoningEngine {
@@ -172,6 +174,9 @@ case class ViperReasoningEngine(verifier: Verifier, program: Program) extends Re
       decls
     )()
 
+//    println(s"INTERMEDIATE PROOF: ${target.pretty()}")
+//    println(body)
+
     val proofMethod = Method("proof", Seq(), Seq(), Seq(), Seq(), Some(body))()
 
     val methods = methodStubs ++ Seq(proofMethod)
@@ -195,5 +200,68 @@ case class ViperReasoningEngine(verifier: Verifier, program: Program) extends Re
       case Failure(errors) => UnSat
     }
   }
+
+  def provePure(kb: KnowledgeBase, target: LogicTerm): ProofResult = {
+    // get the variables used in all kinds of terms in the knowledge base
+    val usedVars = getVariablesOfKnowledgeBase(kb.fieldTypes, kb)
+    val decls = usedVars.map(e => LocalVarDecl(e.name, e.typ)()).toSeq
+
+    // inhale the pure information
+    val infoInhales = Inhale(kb.info.toExp())()
+
+
+    // assertion for the term that needs to be proven
+    val targetAssertion = Assert(target.toExp())()
+
+    // generate abstract methods
+    // (might be useless since no method calls are present generated inhale/assert statements)
+    val methodStubs = program.methods.map(m => Method(
+      m.name,
+      m.formalArgs,
+      m.formalReturns,
+      m.pres,
+      m.posts,
+      None
+    )())
+
+    // combine all statements into a method and join into a method
+    // with the contextual information about the fields etc
+    val stmts: Seq[Stmt] = Seq(infoInhales) ++ Seq(targetAssertion)
+
+    val body = Seqn(
+      stmts,
+      decls
+    )()
+
+    println(s"INTERMEDIATE PROOF: ${target.pretty()}")
+    println(body)
+
+    val proofMethod = Method("proof", Seq(), Seq(), Seq(), Seq(), Some(body))()
+
+    val methods = methodStubs ++ Seq(proofMethod)
+
+    val proofProgram = Program(
+      this.program.domains,
+      this.program.fields,
+      this.program.functions,
+      this.program.predicates,
+      methods,
+      this.program.extensions,
+      new InferInfo()
+    )()
+
+    val result = this.verifier.verify(proofProgram)
+
+    //    println(s"VERIFICATION RESULT: ${result}")
+
+    result match {
+      case Success => Sat
+      case Failure(errors) => {
+        println(s"pure proof errors: ${errors}")
+        UnSat
+      }
+    }
+  }
+
 }
 
