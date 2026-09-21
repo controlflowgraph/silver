@@ -180,6 +180,121 @@ case class MethodInference(engine: ReasoningEngine,
         subs.map(s => s.scale(perm))
           .foldLeft(unfolded)((a, b) => applyRefoldingStep(engine, a, b))
       }
+      case PackageStep(wand, steps) => {
+        println(s"Processing: ${wand.pretty()}")
+        // preparing the knowledge base to perform the packaging procedure
+        val extendedWithDirect = wand.directPrem.foldLeft(base)((a, b) => {
+          // create a fresh temp variable which represents the current permission amount for this field
+          val rc = a.assignment.rc
+          val current = a.direct.getAmount(b.exp)
+          val res = rc.freshValRef().toVarTerm(Perm)
+
+          // setting the current permission amount to a max of 1/1
+          val conditioned = CondTerm(
+            LessEqCmpTerm(AddTerm(b.perm, current), PermAmount.WRITE),
+            AddTerm(b.perm, current),
+            PermAmount.WRITE
+          )
+
+          // update the entry in the direct permission mask
+          val dir = DirectPermissionMask(a.direct.permissions.updated(b.exp, res))
+
+          // update the knowledge base
+          a.withDirect(dir)
+            .extendInfo(EqCmpTerm(res, conditioned))
+        })
+
+        val extendedWithFolded = wand.foldedPrem.foldLeft(extendedWithDirect)((a, b) => {
+          // create a fresh temp variable which represents the current permission amount for this predicate
+          val rc = a.assignment.rc
+          val current = a.folded.getAmount(b.pred)
+          val res = rc.freshValRef().toVarTerm(Perm)
+
+          // setting the current permission amount to a max of 1/1
+          val conditioned = CondTerm(
+            LessEqCmpTerm(AddTerm(b.perm, current), PermAmount.WRITE),
+            AddTerm(b.perm, current),
+            PermAmount.WRITE
+          )
+
+          // update the entry in the direct permission mask
+          val fol = FoldedPermissionMask(a.folded.permissions.updated(b.pred, res))
+
+          // update the knowledge base
+          a.withFolded(fol)
+            .extendInfo(EqCmpTerm(res, conditioned))
+        })
+
+        println("EXTENDED WITH DIRECT STUFF:")
+        println(extendedWithFolded.pretty())
+
+        // applying the steps of the packaging procedure
+        val afterSteps = steps.foldLeft(extendedWithFolded)((k, s) => applyRefoldingStep(engine, k, s))
+        println("AFTER STEPS:")
+        println(afterSteps.pretty())
+
+        // exhaling the permissions which are the consequence of the magic wand
+        val exhaledDirect = wand.directCons.foldLeft(afterSteps)((k, d) => k.withDirect(k.direct.exhale(d)))
+        val exhaledFolded = wand.foldedCons.foldLeft(exhaledDirect)((k, d) => k.withFolded(k.folded.exhale(d)))
+
+        println("AFTER EXHALING RESULT:")
+        println(exhaledFolded.pretty())
+
+        val inhalingWand = exhaledFolded.withMWM(exhaledFolded.mwm.addWand(wand))
+
+        println("AFTER INHALING WAND:")
+        println(inhalingWand.pretty())
+
+        // reconstruction of remaining permissions after performing the folding operations
+
+        // TODO: determine how to collect all the permissions that need to be checked and updated for the values?!
+        // TODO: fix this to work for all dirs and fols of the different parts correctly
+        val dirKeys = wand.directPrem.map(d => d.exp)
+          .union(wand.directCons.map(d => d.exp))
+          .union(base.direct.permissions.keySet)
+
+        val foldedKeys = Set()
+
+        // TODO: maybe unfolding something is problematic and leaves more permissions that it should since stuff might not be in the current scope?
+        //       CHECK THIS!!!!!!!!!!!!!!!!!!!!!
+        val adjustedDirects = dirKeys.foldLeft(inhalingWand)((k, d) => {
+          // currently hypothetical formula:
+          // used amount = before packaging - after packaging
+          // adjusted = provided - (used - prem)
+
+          // determine the amount that is provided before the packaging step
+          val provided = base.direct.getAmount(d)
+          // determine the amount used by the folding procedure
+          val before = extendedWithFolded.direct.getAmount(d)
+          val after = inhalingWand.direct.getAmount(d)
+          val used = SubTerm(before, after)
+
+          // determine the amount that is specified in the premise of the magic wand
+          val prem = wand.directPrem.filter(p => p.exp.equals(d))
+            .map(d => d.perm)
+            .reduceLeftOption(AddTerm)
+            .getOrElse(PermAmount.NONE)
+
+          // compute the adjusted amount using the given hypothetical formula
+          val adjusted = SubTerm(provided, SubTerm(used, prem))
+
+          println(s"SIMP ADJUSTED: ${TermRewriter.simplify(adjusted).pretty()}")
+
+          // TODO: think about what happens when the resulting amount is negative due to invalid packaging operations.....
+          //       -> conditionally clamping to 0/1?
+
+          k.withDirect(DirectPermissionMask(k.direct.permissions.updated(d, adjusted)))
+        })
+//        val adjustedFolded = foldedKeys.foldLeft(adjustedDirects)
+
+        println("AFTER ADJUSTING DIRECT PERMISSIONS:")
+        println(adjustedDirects.pretty())
+
+        throw new IllegalArgumentException("STOPPING")
+      }
+        //      case ApplyStep(wand, perm) => {
+        //
+        //      }
       case c => {
         throw new IllegalArgumentException(s"Unable to process refolding step type ${c.getClass.getCanonicalName}")
       }
@@ -1092,6 +1207,41 @@ case class MethodInference(engine: ReasoningEngine,
 
     val mesh = meth.rep.mesh
     val lines = meth.rep.lines
+
+
+    val count = RefCounter(Counter(0))
+
+    val x = VarTerm("x", Ref)
+    val kb = KnowledgeBase(
+      Seq(),
+      new Assignment(count),
+      new Heap(count),
+      new DirectPermissionMask(Map(
+        (FieldAccTerm(x, "aaa", Int), PermAmount.WRITE),
+        (FieldAccTerm(x, "bbb", Int), PermAmount.WRITE)
+      )),
+      new FoldedPermissionMask(),
+      BoolTerm(true),
+      new Potential(),
+      new MagicWandManager(),
+      fieldTypes
+    )
+
+    val wand = BaguetteMagic(
+      Set(PredFieldAccTerm(FieldAccTerm(x, "aaa", Int), PermAmount.READ)),
+      Set(),
+      Set(),
+      Set(PredInstAccTerm(PredInst("Comb", Seq(x)), PermAmount.WRITE))
+    )
+    val steps = Seq(
+      FoldingStep(PredInst("Comb", Seq(x)), PermAmount.WRITE)
+    )
+
+    val strats = Seq(RefoldingStrategy(Seq(
+      PackageStep(wand, steps)
+    )))
+
+    applyStrategies(this.engine, null, kb, strats)
 
     var restarting = true
     while (restarting) {

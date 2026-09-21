@@ -1,7 +1,7 @@
 package viper.silver.inference.v3.ast
 
 import org.apache.commons.io.filefilter.PrefixFileFilter
-import viper.silver.ast.{Add, And, BoolLit, CurrentPerm, EqCmp, Exp, Field, FieldAccess, FieldAccessPredicate, FractionalPerm, GeCmp, GtCmp, Implies, IntLit, IntPermMul, LeCmp, LocalVar, LtCmp, MagicWand, Minus, Mul, NeCmp, Not, NullLit, Or, PermAdd, PermMinus, PermMul, PredicateAccess, PredicateAccessPredicate, Sub, Type}
+import viper.silver.ast.{Add, And, BoolLit, CondExp, CurrentPerm, EqCmp, Exp, Field, FieldAccess, FieldAccessPredicate, FractionalPerm, GeCmp, GtCmp, Implies, IntLit, IntPermMul, LeCmp, LocalVar, LtCmp, MagicWand, Minus, Mul, NeCmp, Not, NullLit, Or, PermAdd, PermMinus, PermMul, PredicateAccess, PredicateAccessPredicate, Sub, Type}
 import viper.silver.inference.v3.FixedPoint
 
 trait TermSub {
@@ -55,6 +55,24 @@ trait Term {
   def pretty(): String
 
   def toExp(): Exp
+}
+
+case class CondTerm(cond: LogicTerm, left: Term, right: Term) extends Term {
+  def substitute(ts: TermSub): Term = {
+    ts.apply(CondTerm(
+      this.cond.substitute(ts).asInstanceOf[LogicTerm],
+      this.left.substitute(ts),
+      this.right.substitute(ts)
+    ))
+  }
+
+  def pretty(): String = {
+    s"${this.cond.pretty()} ? ${this.left.pretty()} : ${this.right.pretty()}"
+  }
+
+  def toExp(): Exp = {
+    CondExp(this.cond.toExp(), this.left.toExp(), this.right.toExp())()
+  }
 }
 
 case class NullTerm() extends Term {
@@ -118,7 +136,7 @@ case class NegTerm(t: Term) extends Term {
     ts.apply(NegTerm(this.t.substitute(ts)))
   }
 
-  override def pretty(): String = s"-${this.t.pretty()}"
+  override def pretty(): String = s"(-(${this.t.pretty()}))"
 
   override def toExp(): Exp = {
     val exp = this.t.toExp()
@@ -189,7 +207,7 @@ case class SubTerm(a: Term, b: Term) extends Term {
   }
 
   def pretty(): String = {
-    s"${this.a.pretty()} - ${this.b.pretty()}"
+    s"(${this.a.pretty()} - ${this.b.pretty()})"
   }
 
   override def toExp(): Exp = Sub(this.a.toExp(), this.b.toExp())()
@@ -610,6 +628,33 @@ case class BaguetteMagic(directPrem: Set[PredFieldAccTerm], foldedPrem: Set[Pred
 }
 
 object TermRewriter {
+
+  private def pushNegDown: Seq[TermSub] = Seq(
+    FuncTermSub {
+      case NegTerm(AddTerm(a, b)) => AddTerm(NegTerm(a), NegTerm(b))
+      case c => c
+    }
+  )
+
+  private def condSimp: Seq[TermSub] = Seq(
+    FuncTermSub {
+      case CondTerm(c, a, b) if c.equals(BoolTerm(true)) => a
+      case CondTerm(c, a, b) if c.equals(BoolTerm(false)) => b
+      case c => c
+    }
+  )
+
+  private def compSimp: Seq[TermSub] = Seq(
+    FuncTermSub {
+      case LessEqCmpTerm(PermFracTerm(IntTerm(a), IntTerm(b)), PermFracTerm(IntTerm(c), IntTerm(d))) => {
+        val fracA = a.doubleValue / b.doubleValue
+        val fracB = c.doubleValue / d.doubleValue
+        BoolTerm(fracA <= fracB)
+      }
+      case c => c
+    }
+  )
+
   private def constSubSimp: Seq[TermSub] = Seq(
     FuncTermSub {
       case SubTerm(a, b) => AddTerm(a, NegTerm(b))
@@ -709,6 +754,9 @@ object TermRewriter {
   def simplify(t: Term): Term = {
 
     val subs = Seq(
+      pushNegDown,
+      condSimp,
+      compSimp,
       addNegSelf,
       addZeroSimp,
       mulOneSimp,

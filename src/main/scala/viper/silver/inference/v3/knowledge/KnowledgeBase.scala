@@ -252,6 +252,21 @@ case class KnowledgeBase(path: Seq[(Ident, Term)], assignment: Assignment, heap:
     }
   }
 
+  def withMWM(manager: MagicWandManager): KnowledgeBase = {
+    KnowledgeBase(
+      this.path,
+      this.assignment,
+      this.heap,
+      this.direct,
+      this.folded,
+      this.info,
+      this.partial,
+      manager,
+      this.fieldTypes
+    )
+
+  }
+
   def findUnfoldingStrategy(engine: ReasoningEngine, defs: Map[String, PredDef], fa: PredInstAccTerm): Option[RefoldingStrategy] = {
     // TODO: check if it is even possible that the permission amount is reachable
     val directAmount = this.folded.getAmount(fa.pred)
@@ -429,6 +444,34 @@ case class KnowledgeBase(path: Seq[(Ident, Term)], assignment: Assignment, heap:
         case (None, None) => None
       }
     }
+  }
+
+  def withDirect(direct: DirectPermissionMask): KnowledgeBase = {
+    KnowledgeBase(
+      this.path,
+      this.assignment,
+      this.heap,
+      direct,
+      this.folded,
+      this.info,
+      this.partial,
+      this.mwm,
+      this.fieldTypes
+    )
+  }
+
+  def withFolded(folded: FoldedPermissionMask): KnowledgeBase = {
+    KnowledgeBase(
+      this.path,
+      this.assignment,
+      this.heap,
+      this.direct,
+      folded,
+      this.info,
+      this.partial,
+      this.mwm,
+      this.fieldTypes
+    )
   }
 
   def extendInfo(additional: LogicTerm): KnowledgeBase = {

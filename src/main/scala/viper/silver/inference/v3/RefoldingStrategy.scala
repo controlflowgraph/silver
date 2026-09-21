@@ -10,6 +10,20 @@ trait RefoldingStep {
   def rewrite(ts: TermSub): RefoldingStep
 }
 
+case class ApplyStep(wand: BaguetteMagic, perm: Term) extends RefoldingStep {
+  def scale(f: Term): RefoldingStep = {
+    ApplyStep(this.wand, MulTerm(this.perm, f))
+  }
+
+  def pretty(): String = {
+    s"apply [${this.wand.pretty()}] ${this.perm.pretty()}"
+  }
+
+  def rewrite(ts: TermSub): RefoldingStep = {
+    ApplyStep(this.wand.rewrite(ts), this.perm.substitute(ts))
+  }
+}
+
 case class PackageStep(wand: BaguetteMagic, steps: Seq[RefoldingStep]) extends RefoldingStep {
   def scale(f: Term): RefoldingStep = {
     PackageStep(this.wand.scale(f), this.steps.map(s => s.scale(f)))
