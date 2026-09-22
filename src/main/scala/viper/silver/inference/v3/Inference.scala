@@ -324,16 +324,42 @@ case class MethodInference(engine: ReasoningEngine,
 
           k.withFolded(FoldedPermissionMask(k.folded.permissions.updated(d, adjusted)))
         })
-        //        val adjustedFolded = foldedKeys.foldLeft(adjustedDirects)
 
         println("AFTER ADJUSTING REMAINING PERMISSIONS:")
         println(adjustedFolded.pretty())
 
         adjustedFolded
       }
-//      case ApplyStep(wand, perm) => {
-//
-//      }
+      case ApplyStep(wand, perm) => {
+        println(s"APPLYING MW: ${wand.pretty()}")
+        // exhale the premise of the magic wand
+        val exDirPrem = wand.directPrem.foldLeft(base)((k, d) => {
+          val scaled = PredFieldAccTerm(d.exp, MulTerm(d.perm, perm))
+          k.withDirect(k.direct.exhale(scaled))
+        })
+        val exFolPrem = wand.foldedPrem.foldLeft(exDirPrem)((k, f) => {
+          val scaled = PredInstAccTerm(f.pred, MulTerm(f.perm, perm))
+          k.withFolded(k.folded.exhale(scaled))
+        })
+
+        // inhale the consequence of the magic wand
+        val inDirCons = wand.directCons.foldLeft(exFolPrem)((k, f) => {
+          val scaled = PredFieldAccTerm(f.exp, MulTerm(f.perm, perm))
+          k.withDirect(k.direct.inhale(scaled))
+        })
+        val inFolCons = wand.foldedPrem.foldLeft(inDirCons)((k, f) => {
+          val scaled = PredInstAccTerm(f.pred, MulTerm(f.perm, perm))
+          k.withFolded(k.folded.inhale(scaled))
+        })
+
+        // remove the magic wand from the
+        val remWand = inFolCons.withMWM(inFolCons.mwm.removeWand(wand))
+
+        println("AFTER APPLYING MW:")
+        println(remWand.pretty())
+
+        remWand
+      }
       case c => {
         throw new IllegalArgumentException(s"Unable to process refolding step type ${c.getClass.getCanonicalName}")
       }
@@ -1237,17 +1263,7 @@ case class MethodInference(engine: ReasoningEngine,
     this.knowledge.put(ident, after)
   }
 
-  def infer(program: Program, meth: InternalMethod) = {
-    // generate mapping of field definitions to their corresponding type
-    val fieldTypes = program.fields.map(f => f.name -> f.typ).toMap
-
-    this.knowledge.clear()
-    val counter = RefCounter(Counter(0))
-
-    val mesh = meth.rep.mesh
-    val lines = meth.rep.lines
-
-
+  private def testMW(fieldTypes: Map[String, Type]): Unit = {
     val count = RefCounter(Counter(0))
 
     val x = VarTerm("x", Ref)
@@ -1267,20 +1283,38 @@ case class MethodInference(engine: ReasoningEngine,
     )
 
     val wand = BaguetteMagic(
+      Set(PredFieldAccTerm(FieldAccTerm(x, "aaa", Int), PermAmount.READ)),
       Set(),
-      Set(PredInstAccTerm(PredInst("Comb", Seq(x)), PermAmount.WRITE)),
-      Set(PredFieldAccTerm(FieldAccTerm(x, "aaa", Int), PermAmount.WRITE)),
-      Set()
+      Set(),
+      Set(PredInstAccTerm(PredInst("Comb", Seq(x)), PermAmount.READ))
     )
     val steps = Seq(
-      UnfoldingStep(PredInst("Comb", Seq(x)), PermAmount.WRITE, Seq())
+      FoldingStep(PredInst("Comb", Seq(x)), PermAmount.READ)
     )
 
     val strats = Seq(RefoldingStrategy(Seq(
-      PackageStep(wand, steps)
+      PackageStep(wand, steps),
+      ApplyStep(wand, PermAmount.WRITE)
     )))
 
     applyStrategies(this.engine, null, kb, strats)
+
+    if (true) {
+      throw new IllegalArgumentException("STOPPING")
+    }
+  }
+
+  def infer(program: Program, meth: InternalMethod) = {
+    // generate mapping of field definitions to their corresponding type
+    val fieldTypes = program.fields.map(f => f.name -> f.typ).toMap
+
+    this.knowledge.clear()
+    val counter = RefCounter(Counter(0))
+
+    val mesh = meth.rep.mesh
+    val lines = meth.rep.lines
+
+    testMW(fieldTypes)
 
     var restarting = true
     while (restarting) {

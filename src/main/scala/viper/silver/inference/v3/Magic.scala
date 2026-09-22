@@ -3,7 +3,7 @@ package viper.silver.inference.v3
 import viper.silver.inference.v3.ast.{BaguetteMagic, MapTermSub}
 
 case class MagicWandManager(wands: Set[BaguetteMagic]) {
-
+  // TODO: allow partial application of magic wands
   def this() = {
     this(Set())
   }
