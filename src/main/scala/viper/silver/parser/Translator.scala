@@ -339,7 +339,7 @@ case class Translator(program: PProgram) {
   }
 
   private def translate(m: PMethod): Method = m match {
-    case PMethod(_, _, idndef, gens, args, _, pres, posts, body) =>
+    case PMethod(_, _, idndef, gens, args, rets, pres, posts, body) =>
       instantiateMethodTemplate(idndef.name, args.inner.toSeq.map(_.typ))
 
       //      val m = findMethod(idndef)
@@ -675,6 +675,9 @@ case class Translator(program: PProgram) {
   }
 
   def addMember(m: Member): Unit = {
+    println("ADDING MEMBERS:")
+    println(m)
+
     members.put(m.name, m)
   }
 
@@ -863,8 +866,11 @@ case class Translator(program: PProgram) {
           case Right(pfields) => pfields.toSeq map findField
         }
         methodCallAssign(s, Seq(targets.head), lv => NewStmt(lv.head, fields)(pos, info))
-      case PAssign(PDelimited(idnuse: PIdnUseExp), _, rhs) =>
-        LocalVarAssign(LocalVar(idnuse.name, ttyp(idnuse.decl.get.asInstanceOf[PAssignableVarDecl].typ))(pos, SourcePNodeInfo(idnuse)), exp(rhs))(pos, info)
+      case PAssign(PDelimited(idnuse: PIdnUseExp), _, rhs) => {
+        val prev = ttyp(idnuse.decl.get.asInstanceOf[PAssignableVarDecl].typ)
+        val mapped = convertToViperType(prev)
+        LocalVarAssign(LocalVar(idnuse.name, mapped)(pos, SourcePNodeInfo(idnuse)), exp(rhs))(pos, info)
+      }
       case a@PAssign(PDelimited(field: PFieldAccess), _, rhs) => {
         if (isDatatype(field.rcv.typ)) {
           //          println(s"FINDING DATATYPE FIELD: ${field.rcv.typ} -> ${field.idnref.name}")

@@ -213,17 +213,6 @@ case class ViperReasoningEngine(verifier: Verifier, program: Program) extends Re
     // assertion for the term that needs to be proven
     val targetAssertion = Assert(target.toExp())()
 
-    // generate abstract methods
-    // (might be useless since no method calls are present generated inhale/assert statements)
-    val methodStubs = program.methods.map(m => Method(
-      m.name,
-      m.formalArgs,
-      m.formalReturns,
-      m.pres,
-      m.posts,
-      None
-    )())
-
     // combine all statements into a method and join into a method
     // with the contextual information about the fields etc
     val stmts: Seq[Stmt] = Seq(infoInhales) ++ Seq(targetAssertion)
@@ -238,7 +227,7 @@ case class ViperReasoningEngine(verifier: Verifier, program: Program) extends Re
 
     val proofMethod = Method("proof", Seq(), Seq(), Seq(), Seq(), Some(body))()
 
-    val methods = methodStubs ++ Seq(proofMethod)
+    val methods = Seq(proofMethod)
 
     val proofProgram = Program(
       this.program.domains,
@@ -249,6 +238,9 @@ case class ViperReasoningEngine(verifier: Verifier, program: Program) extends Re
       this.program.extensions,
       new InferInfo()
     )()
+
+    println("PROOF PROGRAM:")
+    println(proofProgram)
 
     val result = this.verifier.verify(proofProgram)
 

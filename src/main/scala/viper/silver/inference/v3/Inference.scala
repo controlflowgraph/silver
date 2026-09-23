@@ -293,9 +293,9 @@ case class MethodInference(engine: ReasoningEngine,
         })
 
         val adjustedFolded = foldedKeys.foldLeft(adjustedDirects)((k, d) => {
-          // currently hypothetical formula:
-          // used amount = before packaging - after packaging
-          // adjusted = provided - (used - prem)
+          // before = base + prem >= 1/1 ? 1/1 : base + prem
+          // used = before - after
+          // adjusted = provided - (used - prem <= 0/1 ? 0/1 : used - prem)
 
           // determine the amount that is provided before the packaging step
           val provided = base.folded.getAmount(d)
@@ -383,7 +383,7 @@ case class MethodInference(engine: ReasoningEngine,
 
   private def propagateBackFieldPermReq(from: Ident, pred: PredFieldAccTerm, actual: Term): Boolean = {
     // TODO: fix the shortcut and actually propagate the requirements backward
-    println(s"PROPAGATING BACK: ${pred.pretty()} has only ${actual.pretty()} from ${from}")
+    println(s"PROPAGATING BACK FIELD PERM: ${pred.pretty()} has only ${actual.pretty()} from ${from}")
     val currentSpec = this.methSpec(this.currentMethod.method)
     val currentPre = currentSpec._1
     val currentPost = currentSpec._2
@@ -721,6 +721,16 @@ case class MethodInference(engine: ReasoningEngine,
       strat.map(s => applyStrategies(this.engine, inj, k, Seq(s))).getOrElse(k)
     })
 
+    // TODO: fix this to actually use the escalation ladder to get the permissions
+
+    val remaining = reqsValue.map(p => (p, kb.direct.getAmount(p.exp)))
+      .filter(p => !kb.hasEnoughPermissions(this.engine, p._1.perm, p._2))
+
+    val (restarting, kbbbb) = processRequirements(ln, inj, kb, remaining.map(_._1).toSet, Set())
+    println("RESTARTING AND KBBBB")
+    println(restarting)
+    println(kbbbb.pretty())
+
     reqsValue.map(p => (p, kb.direct.getAmount(p.exp)))
       .filter(p => !kb.hasEnoughPermissions(this.engine, p._1.perm, p._2))
       .foreach(p => propagateBackFieldPermReq(ln, p._1, p._2))
@@ -872,6 +882,7 @@ case class MethodInference(engine: ReasoningEngine,
     // perform the assignment
     val (a2, refBeforeAssign) = before.assignment.lookup(target.name, target.typ)
     val valRef = a2.rc.freshValRef()
+    val normTarget = valRef.toVarTerm(target.typ)
     val ua = a2.assign(target.name, valRef, target.typ)
 
     val afterAssign = KnowledgeBase(
@@ -883,7 +894,7 @@ case class MethodInference(engine: ReasoningEngine,
     val resKb = afterAssign.update(
       a => h => d => f => i => {
         val dir = fields.foldLeft(d.substitute(ts))((m, f) => {
-          val fa = FieldAccTerm(target, f._1, f._2)
+          val fa = FieldAccTerm(normTarget, f._1, f._2)
           m.inhale(PredFieldAccTerm(fa, PermAmount.WRITE))
         })
         val fol = f.substitute(ts)
@@ -974,8 +985,8 @@ case class MethodInference(engine: ReasoningEngine,
 
   private def normalizePotentialRequirements(before: KnowledgeBase, reqs: Seq[ImplTerm]): (KnowledgeBase, Seq[ImplTerm]) = {
     reqs.foldLeft((before, Seq[ImplTerm]()))((acc, i) => {
-      val (kb1, prem) = normalizeLogicTerm(acc._1, i.prem)
-      val (kb2, cons) = normalizeLogicTerm(kb1, i.cons)
+      val (kb1, prem) = TermNormalization.normalizeMutablePartsInLogicTerm(acc._1, i.prem)
+      val (kb2, cons) = TermNormalization.normalizeMutablePartsInLogicTerm(kb1, i.cons)
       val impl = ImplTerm(prem, cons)
       (kb2, acc._2 ++ Seq(impl))
     })
@@ -1314,7 +1325,7 @@ case class MethodInference(engine: ReasoningEngine,
     val mesh = meth.rep.mesh
     val lines = meth.rep.lines
 
-    testMW(fieldTypes)
+//    testMW(fieldTypes)
 
     var restarting = true
     while (restarting) {
@@ -1360,6 +1371,8 @@ case class MethodInference(engine: ReasoningEngine,
 
             val (shouldRestart, after) = processLine(kb, line)
             restarting = shouldRestart
+
+            println(s"SHOULD RESTART: ${restarting}")
 
 
             println(s":::::::::::::::: AFTER ${current.pretty()} :::::::::::::::::")
@@ -1418,6 +1431,19 @@ case class MethodInference(engine: ReasoningEngine,
           on(this.engine, startKb, finalKb, meth)
 
           val afterPosts = mergedPosts.foldLeft(finalKb)((kb, p) => processLine(kb, ExhaleLine(meth.stop, finInj, p))._2)
+
+          val originalTypes = program.inferInfo.typeAnnotations(this.currentMethod.method)._1
+          val argumentNames = this.currentMethod.args.map(a => a._1)
+          argumentNames.zip(originalTypes)
+            .filter(a => a._2.isInstanceOf[DatatypeType])
+            .foreach(a => {
+              println(s"CHECKING IF PACKAGING IS POSSIBLE FOR: ${a._1}   ${a._2}")
+              val paramType = a._2.asInstanceOf[DatatypeType]
+              val predName = paramType.datatypeName
+              val variable = VarTerm(a._1, Ref)
+              val pred = PredInstAccTerm(PredInst(predName, Seq(variable)), PermAmount.WRITE)
+              println(attemptMagicWandConstruction(afterPosts, pred))
+            })
           //        this.knowledge.put(meth.stop, afterPosts)
           // TODO: extend the post conditions with the information that are left over
         })
@@ -1676,7 +1702,7 @@ case class Inference(verifier: Verifier, defs: Map[String, PredDef], reps: Map[S
     })
   }
 }
-
+// TODO: the generated contract for the make method is not complete and leaves the parts about the predicate (e.g. List(this) out)
 
 object MagicWanderWonder {
 
