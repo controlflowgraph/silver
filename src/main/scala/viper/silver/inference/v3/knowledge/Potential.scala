@@ -27,4 +27,9 @@ case class Potential(partial: Set[ImplTerm]) {
     //      into just:   { a ==> acc(A, 1/2) }
     Potential(this.partial.union(partial.toSet))
   }
+
+  def exhale(partial: Seq[ImplTerm]): Potential = {
+    // TODO: this diff can lose information
+    Potential(this.partial.diff(partial.toSet))
+  }
 }

@@ -224,6 +224,8 @@ case class VarTerm(name: String, typ: Type) extends LogicTerm {
   }
 
   override def toExp(): Exp = LocalVar(this.name, this.typ)()
+
+  override def scale(f: Term): LogicTerm = this
 }
 
 case class FieldAccTerm(src: Term, field: String, typ: Type) extends Term {
@@ -250,6 +252,8 @@ trait LogicTerm extends Term {
   def or(other: LogicTerm): LogicTerm = {
     OrTerm(this, other)
   }
+
+  def scale(f: Term): LogicTerm
 }
 
 case class BoolTerm(value: Boolean) extends LogicTerm {
@@ -262,6 +266,8 @@ case class BoolTerm(value: Boolean) extends LogicTerm {
   }
 
   override def toExp(): Exp = BoolLit(this.value)()
+
+  override def scale(f: Term): LogicTerm = this
 }
 
 case class AndTerm(a: LogicTerm, b: LogicTerm) extends LogicTerm {
@@ -277,6 +283,8 @@ case class AndTerm(a: LogicTerm, b: LogicTerm) extends LogicTerm {
   }
 
   override def toExp(): Exp = And(this.a.toExp(), this.b.toExp())()
+
+  override def scale(f: Term): LogicTerm = this.a.scale(f).and(this.b.scale(f))
 }
 
 case class OrTerm(a: LogicTerm, b: LogicTerm) extends LogicTerm {
@@ -292,6 +300,8 @@ case class OrTerm(a: LogicTerm, b: LogicTerm) extends LogicTerm {
   }
 
   override def toExp(): Exp = Or(this.a.toExp(), this.b.toExp())()
+
+  override def scale(f: Term): LogicTerm = this.a.scale(f).or(this.b.scale(f))
 }
 
 case class NotTerm(t: LogicTerm) extends LogicTerm {
@@ -306,6 +316,8 @@ case class NotTerm(t: LogicTerm) extends LogicTerm {
   }
 
   override def toExp(): Exp = Not(this.t.toExp())()
+
+  override def scale(f: Term): LogicTerm = NotTerm(this.t.scale(f))
 }
 
 case class ImplTerm(prem: LogicTerm, cons: LogicTerm) extends LogicTerm {
@@ -321,6 +333,17 @@ case class ImplTerm(prem: LogicTerm, cons: LogicTerm) extends LogicTerm {
   }
 
   override def toExp(): Exp = Implies(this.prem.toExp(), this.cons.toExp())()
+
+  def rewrite(ts: TermSub): ImplTerm = {
+    ImplTerm(
+      this.prem.substitute(ts).asInstanceOf[LogicTerm],
+      this.cons.substitute(ts).asInstanceOf[LogicTerm]
+    )
+  }
+
+  def scale(f: Term): ImplTerm = {
+    ImplTerm(this.prem, this.cons.scale(f))
+  }
 }
 
 trait Comparison {
@@ -357,6 +380,8 @@ case class EqCmpTerm(a: Term, b: Term) extends LogicTerm with Comparison {
   override def toLogicTerm(): LogicTerm = this
 
   override def toExp(): Exp = EqCmp(this.a.toExp(), this.b.toExp())()
+
+  override def scale(f: Term): LogicTerm = this
 }
 
 case class NotEqCmpTerm(a: Term, b: Term) extends LogicTerm with Comparison {
@@ -384,6 +409,8 @@ case class NotEqCmpTerm(a: Term, b: Term) extends LogicTerm with Comparison {
   override def toLogicTerm(): LogicTerm = this
 
   override def toExp(): Exp = NeCmp(this.a.toExp(), this.b.toExp())()
+
+  override def scale(f: Term): LogicTerm = this
 }
 
 case class LessCmpTerm(a: Term, b: Term) extends LogicTerm with Comparison {
@@ -411,6 +438,8 @@ case class LessCmpTerm(a: Term, b: Term) extends LogicTerm with Comparison {
   override def toLogicTerm(): LogicTerm = this
 
   override def toExp(): Exp = LtCmp(this.a.toExp(), this.b.toExp())()
+
+  override def scale(f: Term): LogicTerm = this
 }
 
 case class LessEqCmpTerm(a: Term, b: Term) extends LogicTerm with Comparison {
@@ -439,6 +468,8 @@ case class LessEqCmpTerm(a: Term, b: Term) extends LogicTerm with Comparison {
   override def toLogicTerm(): LogicTerm = this
 
   override def toExp(): Exp = LeCmp(this.a.toExp(), this.b.toExp())()
+
+  override def scale(f: Term): LogicTerm = this
 }
 
 case class GreaterCmpTerm(a: Term, b: Term) extends LogicTerm with Comparison {
@@ -466,6 +497,8 @@ case class GreaterCmpTerm(a: Term, b: Term) extends LogicTerm with Comparison {
   override def toLogicTerm(): LogicTerm = this
 
   override def toExp(): Exp = GtCmp(this.a.toExp(), this.b.toExp())()
+
+  override def scale(f: Term): LogicTerm = this
 }
 
 case class GreaterEqCmpTerm(a: Term, b: Term) extends LogicTerm with Comparison {
@@ -493,6 +526,8 @@ case class GreaterEqCmpTerm(a: Term, b: Term) extends LogicTerm with Comparison 
   override def toLogicTerm(): LogicTerm = this
 
   override def toExp(): Exp = GeCmp(this.a.toExp(), this.b.toExp())()
+
+  override def scale(f: Term): LogicTerm = this
 }
 
 object PermAmount {
@@ -574,14 +609,14 @@ case class PredFieldAccTerm(exp: FieldAccTerm, perm: Term) extends LogicTerm {
 // TODO: the magic wand could be generalized?!
 //       - more general precondition (instead of sets of direct/folded permissions)
 //       - more general body instead of explicitly forcing a single PredInstAccTerm
-case class BaguetteMagic(directPrem: Set[PredFieldAccTerm], foldedPrem: Set[PredInstAccTerm], directCons: Set[PredFieldAccTerm], foldedCons: Set[PredInstAccTerm]) extends LogicTerm {
+case class BaguetteMagic(directPrem: Set[PredFieldAccTerm], foldedPrem: Set[PredInstAccTerm], partialPrem: Set[ImplTerm], directCons: Set[PredFieldAccTerm], foldedCons: Set[PredInstAccTerm], partialCons: Set[ImplTerm]) extends LogicTerm {
 
-  private def premTerms(): Set[Term] = {
-    this.directPrem.asInstanceOf[Set[Term]].union(this.foldedPrem.asInstanceOf[Set[Term]])
+  def premTerms(): Set[LogicTerm] = {
+    this.directPrem.asInstanceOf[Set[LogicTerm]].union(this.foldedPrem.asInstanceOf[Set[LogicTerm]]).union(this.partialPrem.asInstanceOf[Set[LogicTerm]])
   }
 
-  private def consTerms(): Set[Term] = {
-    this.directCons.asInstanceOf[Set[Term]].union(this.foldedCons.asInstanceOf[Set[Term]])
+  def consTerms(): Set[LogicTerm] = {
+    this.directCons.asInstanceOf[Set[LogicTerm]].union(this.foldedCons.asInstanceOf[Set[LogicTerm]]).union(this.partialCons.asInstanceOf[Set[LogicTerm]])
   }
 
   def pretty(): String = {
@@ -593,26 +628,32 @@ case class BaguetteMagic(directPrem: Set[PredFieldAccTerm], foldedPrem: Set[Pred
   def rewrite(ts: TermSub) : BaguetteMagic = {
     val dirsPrem = this.directPrem.map(d => d.rewrite(ts))
     val folsPrem = this.foldedPrem.map(f => f.rewrite(ts))
+    val partPrem = this.partialPrem.map(f => f.rewrite(ts))
     val dirsCons = this.directCons.map(d => d.rewrite(ts))
     val folsCons = this.foldedCons.map(f => f.rewrite(ts))
-    BaguetteMagic(dirsPrem, folsPrem, dirsCons, folsCons)
+    val partCons = this.partialCons.map(f => f.rewrite(ts))
+    BaguetteMagic(dirsPrem, folsPrem, partPrem, dirsCons, folsCons, partCons)
   }
 
   def scale(f: Term): BaguetteMagic = {
     val dirsPrem = this.directPrem.map(d => d.scale(f))
     val folsPrem = this.foldedPrem.map(d => d.scale(f))
+    val partPrem = this.partialPrem.map(d => d.scale(f))
     val dirsCons = this.directCons.map(d => d.scale(f))
     val folsCons = this.foldedCons.map(f => f.scale(f))
-    BaguetteMagic(dirsPrem, folsPrem, dirsCons, folsCons)
+    val partCons = this.partialCons.map(f => f.scale(f))
+    BaguetteMagic(dirsPrem, folsPrem, partPrem, dirsCons, folsCons, partCons)
   }
 
 
   override def substitute(ts: TermSub): Term = {
     val dirsPrem = this.directPrem.map(d => d.substitute(ts).asInstanceOf[PredFieldAccTerm])
     val folsPrem = this.foldedPrem.map(f => f.substitute(ts).asInstanceOf[PredInstAccTerm])
+    val partPrem = this.partialPrem.map(f => f.substitute(ts).asInstanceOf[ImplTerm])
     val dirsCons = this.directCons.map(d => d.substitute(ts).asInstanceOf[PredFieldAccTerm])
     val folsCons = this.foldedCons.map(f => f.substitute(ts).asInstanceOf[PredInstAccTerm])
-    BaguetteMagic(dirsPrem, folsPrem, dirsCons, folsCons)
+    val partCons = this.partialCons.map(f => f.substitute(ts).asInstanceOf[ImplTerm])
+    BaguetteMagic(dirsPrem, folsPrem, partPrem,  dirsCons, folsCons, partCons)
   }
 
   override def toExp(): Exp = {
@@ -818,11 +859,13 @@ object LogicTermRewriting
         else {
           lt match {
             case AndTerm(a, b) => containsLT(a, pattern) || containsLT(b, pattern)
-            case BaguetteMagic(directPrem, foldedPrem, directCons, foldedCons) => {
+            case BaguetteMagic(directPrem, foldedPrem, partialPrem, directCons, foldedCons, partialCons) => {
               directPrem.exists(a => containsLT(a, pattern)) ||
               foldedPrem.exists(a => containsLT(a, pattern)) ||
+              partialPrem.exists(a => containsLT(a, pattern)) ||
               directCons.exists(a => containsLT(a, pattern)) ||
-              foldedCons.exists(a => containsLT(a, pattern))
+              foldedCons.exists(a => containsLT(a, pattern)) ||
+              partialCons.exists(a => containsLT(a, pattern))
             }
             case BoolTerm(value) => false
             case EqCmpTerm(a, b) => containsLT(a, pattern) || containsLT(b, pattern)
@@ -848,7 +891,7 @@ object LogicTermRewriting
   private def collectApplicable(lt: LogicTerm): Option[(Term, Term)] = {
     lt match {
       case AndTerm(a, b) => collectApplicable(a).orElse(collectApplicable(b))
-      case BaguetteMagic(directPrem, foldedPrem, directCons, foldedCons) => None
+      case _: BaguetteMagic => None
       case BoolTerm(value) => None
       case EqCmpTerm(v@VarTerm(n, _), b) if n.startsWith("t$") && !containsLT(b, v) => Some((v, b))
       case EqCmpTerm(a, b) => None

@@ -11,6 +11,8 @@ case class InferV3(program: Program, verifier: Verifier) {
   private def transformMethodsToInternalRepresentation(defs: Map[String, PredDef]): Map[String, InternalMethod] = {
     this.program.methods.map(m => {
       val res = InternalFormTranslator.processToInternalForm(defs, m)
+      println(s"INTERNAL REPRESENTATION FOR: ${res.method}")
+      println(res.body)
       println(res.rep.pretty())
       res.method -> res
     }).toMap

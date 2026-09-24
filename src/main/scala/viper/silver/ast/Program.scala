@@ -12,15 +12,16 @@ import viper.silver.ast.MagicWandStructure.MagicWandStructure
 import viper.silver.ast.utility.Expressions.{asAccessFragment, asPureFragment}
 import viper.silver.ast.utility.rewriter.StrategyBuilder
 import viper.silver.cfg.silver.{CfgGenerator, SilverCfg}
+import viper.silver.parser.{DatatypeTemplate, MethodTemplate}
 import viper.silver.verifier.ConsistencyError
 import viper.silver.utility.{CacheHelper, DependencyAware}
 
 import scala.collection.immutable
 import scala.reflect.ClassTag
 
-case class InferInfo(typeAnnotations: Map[String, (Seq[Type], Seq[Type])]) {
+case class InferInfo(typeAnnotations: Map[String, (Seq[Type], Seq[Type])], datatypeTemplates: Map[String, DatatypeTemplate], methodTemplates: Map[String, MethodTemplate], domains: Map[String, Domain]) {
   def this() = {
-    this(Map())
+    this(Map(), Map(), Map(), Map())
   }
 }
 

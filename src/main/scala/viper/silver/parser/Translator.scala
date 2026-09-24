@@ -27,19 +27,6 @@ import scala.language.implicitConversions
  * Messaging feature.
  */
 case class Translator(program: PProgram) {
-
-  case class MethodTemplate(generics: Seq[String], name: String, args: Seq[(String, Type)], ref: PMethod) {
-
-  }
-
-  case class DatatypeTemplate(generics: Seq[String], name: String, fields: Seq[(String, Type)]) {
-    def getInstantiatedName(args: Seq[Type]): String = {
-      val parameters = this.generics.map(g => TypeVar(g))
-      val mapping = parameters.zip(args).toMap
-      encodeTypeAsString(DatatypeType(this.name, mapping)(parameters))
-    }
-  }
-
   val datatypeTemplateInfos: scala.collection.mutable.Map[String, Seq[String]] = new mutable.HashMap[String, Seq[String]]()
   val datatypeTemplates: scala.collection.mutable.Map[String, DatatypeTemplate] = new mutable.HashMap[String, DatatypeTemplate]()
   val instantiatedDatatypes: scala.collection.mutable.Map[Type, Datatype] = new mutable.HashMap[Type, Datatype]()
@@ -196,9 +183,9 @@ case class Translator(program: PProgram) {
       datatypeTemplateInfos.put(d.idndef.name, d.typVarsSeq.map(_.idndef.name))
     })
 
-//    println(s"preparing templates: ${dts}")
+    //    println(s"preparing templates: ${dts}")
     dts.foreach(d => {
-//      println(s"preparing the datatype ${d.idndef.name}")
+      //      println(s"preparing the datatype ${d.idndef.name}")
       val dt = DatatypeTemplate(
         d.typVarsSeq.map(_.idndef.name),
         d.idndef.name,
@@ -314,7 +301,7 @@ case class Translator(program: PProgram) {
     val finalProgram = ImpureAssumeRewriter.rewriteAssumes(Program(domain.asInstanceOf[Seq[Domain]], filteredFields,
       functions.asInstanceOf[Seq[Function]], filteredPredicates, filteredMethods,
       (extensions filter (t => t.isInstanceOf[ExtensionMember])).asInstanceOf[Seq[ExtensionMember]],
-      InferInfo(typeAnnotations.toMap))(program))
+      InferInfo(typeAnnotations.toMap, datatypeTemplates.toMap, methodTemplates.toMap, translatedDomains.toMap))(program))
 
     //    println("METHODS:")
     //    filteredMethods.foreach(m => println(m.name, m.pres))
@@ -328,7 +315,7 @@ case class Translator(program: PProgram) {
     //    println("FIELDS:")
     //    filteredFields.foreach(println)
 
-//    println(s"C MESSAGES: ${Consistency.messages}")
+    //    println(s"C MESSAGES: ${Consistency.messages}")
 
     if (Consistency.messages.isEmpty) Some(finalProgram) // all error messages generated during translation should be Consistency messages
     else None
@@ -474,18 +461,21 @@ case class Translator(program: PProgram) {
         val zeroPerm = FractionalPerm(IntLit(0)(), IntLit(1)())()
 
         val valFieldAccess = FieldAccess(LocalVar("this", Ref)(), Field(fieldName, Ref)())()
-        val permissionFieldAccess = FieldAccess(LocalVar("this", Ref)(), Field(s"${fieldName}${"$"}P", Perm)())()
+        // TODO: reactivate when introducing permission fields
+        //        val permissionFieldAccess = FieldAccess(LocalVar("this", Ref)(), Field(s"${fieldName}${"$"}P", Perm)())()
+        val permissionFieldAccess = onePerm
 
         val predAccess = PredicateAccess(Seq(valFieldAccess), encodedSignature)()
         val predAccPred = PredicateAccessPredicate(predAccess, Some(permissionFieldAccess))()
         val guarded = Implies(NeCmp(valFieldAccess, NullLit()())(), predAccPred)()
 
-        val permFieldPredAccess = FieldAccessPredicate(permissionFieldAccess, Some(onePerm))()
-
-        val permissionRange = And(LeCmp(zeroPerm, permissionFieldAccess)(), LeCmp(permissionFieldAccess, onePerm)())()
 
 
-        Some(And(And(permFieldPredAccess, permissionRange)(), guarded)())
+        // TODO: reactivate when introducing permission fields
+        //        val permFieldPredAccess = FieldAccessPredicate(permissionFieldAccess, Some(onePerm))()
+        //        val permissionRange = And(LeCmp(zeroPerm, permissionFieldAccess)(), LeCmp(permissionFieldAccess, onePerm)())()
+        //        Some(And(And(permFieldPredAccess, permissionRange)(), guarded)())
+        Some(guarded)
       }
       case _ => None
     }
@@ -562,27 +552,20 @@ case class Translator(program: PProgram) {
     val makeName = s"make${"$"}${encodedSignature}"
 
     val valArgs = instantiated.content.map(v => LocalVarDecl(v.name, convertToViperType(v.typ))())
-    val permArgs = instantiated.content.flatMap(v => if (isDatatype(v.typ)) Some(v.name + "$P") else None)
-      .map(f => LocalVarDecl(f, Perm)())
-    val args = valArgs ++ permArgs
+    //    val permArgs = instantiated.content.flatMap(v => if (isDatatype(v.typ)) Some(v.name + "$P") else None)
+    //      .map(f => LocalVarDecl(f, Perm)())
+    //    val args = valArgs ++ permArgs
+    val args = valArgs
 
     val returns = Seq(LocalVarDecl("this", Ref)())
 
-    typeAnnotations.put(makeName, (instantiated.content.map(v => v.typ) ++ permArgs.map(a => a.typ), Seq(typ)))
+    // TODO: reactivate whne introducing permission fields
+    //    typeAnnotations.put(makeName, (instantiated.content.map(v => v.typ) ++ permArgs.map(a => a.typ), Seq(typ)))
+    typeAnnotations.put(makeName, (instantiated.content.map(v => v.typ), Seq(typ)))
 
     // TODO: add permissions to all the transitive predicates as preconditions
     // TODO: REACTIVATE WHEN REQUIRES ARE NOT INTRODUCED BLINDLY
     val transPredAccess = Seq()
-//    instantiated.content
-//      .filter(v => isDatatype(v.typ))
-//      .map(v => {
-//        val valParam = LocalVar(v.name, Ref)()
-//        val permParam = LocalVar(v.name + "$P", Perm)()
-//        val predSignature = encodeTypeAsString(v.typ)
-//        val predAccess = PredicateAccess(Seq(valParam), predSignature)()
-//        val predAccPred = PredicateAccessPredicate(predAccess, Some(permParam))()
-//        Implies(NeCmp(valParam, NullLit()())(), predAccPred)()
-//      })
 
     val permRangeGuard = instantiated.content
       .filter(v => isDatatype(v.typ))
@@ -596,7 +579,8 @@ case class Translator(program: PProgram) {
     // TODO: add permission equality to the recursive datatype predicates
 
     // MAKE STATEMENTS NEED TO INCORPORATE
-    val preconditions = permRangeGuard ++ transPredAccess
+    //    val preconditions = permRangeGuard ++ transPredAccess
+    val preconditions = transPredAccess
 
     val finalPredAccess = PredicateAccessPredicate(
       PredicateAccess(Seq(LocalVar("this", Ref)()), encodedSignature)(),
@@ -643,7 +627,9 @@ case class Translator(program: PProgram) {
       })
 
 
-    val objCreation = NewStmt(LocalVar("this", Ref)(), objValFields ++ objPermFields)()
+    // TODO: reactivate when introducing permission fields
+    //    val objCreation = NewStmt(LocalVar("this", Ref)(), objValFields ++ objPermFields)()
+    val objCreation = NewStmt(LocalVar("this", Ref)(), objValFields)()
 
     val valSetting = instantiated.content
       .map(v => {
@@ -665,7 +651,9 @@ case class Translator(program: PProgram) {
         FieldAssign(fieldAccess, value)()
       })
 
-    val body = Seqn(Seq(objCreation) ++ valSetting ++ permSetting, Seq())()
+    // TODO: reactivate when introducing permission fields
+    //    val body = Seqn(Seq(objCreation) ++ valSetting ++ permSetting, Seq())()
+    val body = Seqn(Seq(objCreation) ++ valSetting, Seq())()
 
     Method(
       makeName,
@@ -696,7 +684,8 @@ case class Translator(program: PProgram) {
           instantiatedDatatypes.put(typ, instantiated)
           val fields = generateFields(typ, instantiated)
           addAllMembers(fields)
-          val permFields = generatePermissionFields(typ, instantiated)
+          // TODO: reactivate when introducing permission fields in datatype
+          val permFields = Seq() // generatePermissionFields(typ, instantiated)
           addAllMembers(permFields)
 
 
@@ -798,7 +787,6 @@ case class Translator(program: PProgram) {
         postsConverted,
         None
       )(temp.ref, NoInfo))
-
 
 
       val translatedBody = adjustedBody.map(b => translatePSeqn(b))
@@ -1472,4 +1460,16 @@ object Translator {
       AnnotationInfo(annotations.groupBy(_.key).map { case (k, v) => k.str -> v.flatMap(_.values.inner.toSeq.map(_.str)) })
     }
   }
+}
+
+case class MethodTemplate(generics: Seq[String], name: String, args: Seq[(String, Type)], ref: PMethod) {
+
+}
+
+case class DatatypeTemplate(generics: Seq[String], name: String, fields: Seq[(String, Type)]) {
+  //    def getInstantiatedName(args: Seq[Type]): String = {
+  //      val parameters = this.generics.map(g => TypeVar(g))
+  //      val mapping = parameters.zip(args).toMap
+  //      encodeTypeAsString(DatatypeType(this.name, mapping)(parameters))
+  //    }
 }

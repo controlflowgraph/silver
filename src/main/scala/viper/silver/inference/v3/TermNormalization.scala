@@ -27,7 +27,7 @@ object TermNormalization {
     val (kbA, refA, typA, infoA) = computeNormalizedValueRef(kb, counter, left)
     val (kbB, refB, typB, infoB) = computeNormalizedValueRef(kbA, counter, right)
     val ref = counter.freshValRef()
-    if(!typeMapping.contains(typA, typB)){
+    if (!typeMapping.contains(typA, typB)) {
       println(s"ERROR WHEN ${left.pretty()}   ${right.pretty()}")
     }
     val resType = typeMapping(typA, typB)
@@ -185,8 +185,14 @@ object TermNormalization {
         }
         current match {
           case VarTerm(name, typ) => {
-            val (assign, ref) = kb.assignment.lookup(name, typ)
-            val start = kb.withAssignment(assign)
+            val (start, ref) = if (name.startsWith("t$")) {
+              val id = Integer.parseInt(name.substring(2))
+              val valRef = ValRef(id)
+              (kb, valRef)
+            } else {
+              val (assign, rrr) = kb.assignment.lookup(name, typ)
+              (kb.withAssignment(assign), rrr)
+            }
             val res = fields.foldLeft((start, ref))((acc, f) => {
               val (heap, ref) = acc._1.heap.lookupField(acc._2, f)
               (acc._1.withHeap(heap), ref)
@@ -244,12 +250,16 @@ object TermNormalization {
         val (kbB, normB) = normalizeMutablePartsInLogicTerm(kbA, b)
         (kbB, AndTerm(normA, normB))
       }
-      case BaguetteMagic(directPrem, foldedPrem, directCons, foldedCons) => {
+      case BaguetteMagic(directPrem, foldedPrem, partialPrem, directCons, foldedCons, partialCons) => {
         val (kbA, normA) = normalizeMutablePartsInDirects(kb, directPrem)
         val (kbB, normB) = normalizeMutablePartsInFolded(kbA, foldedPrem)
-        val (kbC, normC) = normalizeMutablePartsInDirects(kbB, directCons)
-        val (kbD, normD) = normalizeMutablePartsInFolded(kbC, foldedCons)
-        (kbD, BaguetteMagic(normA, normB, normC, normD))
+        val (kbC, normC) = normalizePotentialRequirements(kbA, partialPrem.toSeq)
+
+        val (kbD, normD) = normalizeMutablePartsInDirects(kbB, directCons)
+        val (kbE, normE) = normalizeMutablePartsInFolded(kbC, foldedCons)
+        val (kbF, normF) = normalizePotentialRequirements(kbC, partialCons.toSeq)
+
+        (kbF, BaguetteMagic(normA, normB, normC.toSet, normD, normE, normF.toSet))
       }
       case lt: BoolTerm => (kb, lt)
       case ImplTerm(prem, cons) => {
@@ -298,10 +308,15 @@ object TermNormalization {
       }
       case d: PredFieldAccTerm => normalizeMutablePartsInDirect(kb, d)
       case f: PredInstAccTerm => normalizeMutablePartsInFold(kb, f)
-      case VarTerm(name, typ) => {
-        val (assign, ref) = kb.assignment.lookup(name, typ)
-        val start = kb.withAssignment(assign)
-        (start, ref.toVarTerm(typ))
+      case v@VarTerm(name, typ) => {
+        if (name.startsWith("t$")) {
+          (kb, v)
+        }
+        else {
+          val (assign, ref) = kb.assignment.lookup(name, typ)
+          val start = kb.withAssignment(assign)
+          (start, ref.toVarTerm(typ))
+        }
       }
       case c =>
         throw new IllegalArgumentException(s"Unable to normalize mutable parts in logic term of type ${logic.getClass.getCanonicalName}")
@@ -359,10 +374,12 @@ object TermNormalization {
     reqs.foldLeft((before, Seq[BaguetteMagic]()))((acc, f) => {
       val (kb1, dirPrem) = normalizeDirectRequirements(before, f.directPrem.toSeq)
       val (kb2, folPrem) = normalizeFoldedRequirements(kb1, f.foldedPrem.toSeq)
-      val (kb3, dirCons) = normalizeDirectRequirements(kb2, f.directCons.toSeq)
-      val (kb4, folCons) = normalizeFoldedRequirements(kb3, f.foldedCons.toSeq)
+      val (kb3, parPrem) = normalizePotentialRequirements(kb2, f.partialPrem.toSeq)
+      val (kb4, dirCons) = normalizeDirectRequirements(kb3, f.directCons.toSeq)
+      val (kb5, folCons) = normalizeFoldedRequirements(kb4, f.foldedCons.toSeq)
+      val (kb6, parCons) = normalizePotentialRequirements(kb5, f.partialCons.toSeq)
 
-      (kb4, acc._2 ++ Seq(BaguetteMagic(dirPrem.toSet, folPrem.toSet, dirCons.toSet, folCons.toSet)))
+      (kb4, acc._2 ++ Seq(BaguetteMagic(dirPrem.toSet, folPrem.toSet, parPrem.toSet, dirCons.toSet, folCons.toSet, parCons.toSet)))
     })
 
   }

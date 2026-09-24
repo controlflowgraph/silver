@@ -17,6 +17,9 @@ case class Assignment(rc: RefCounter, variables: Map[String, (ValRef, Type)]) {
   }
 
   def lookup(name: String, typ: Type): (Assignment, ValRef) = {
+    if(name.startsWith("t$")){
+      throw new IllegalArgumentException("Unable to lookup temp variable!")
+    }
     if (this.variables.contains(name)) {
       (this, this.variables(name)._1)
     }

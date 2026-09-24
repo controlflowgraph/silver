@@ -68,16 +68,17 @@ object InternalFormTranslator {
     }
   }
 
-  private def extractMagicWandParts(term: Term): (Set[PredFieldAccTerm], Set[PredInstAccTerm]) = {
+  private def extractMagicWandParts(term: Term): (Set[PredFieldAccTerm], Set[PredInstAccTerm], Set[ImplTerm]) = {
     term match {
       case AndTerm(a, b) => {
-        val (dirA, folA) = extractMagicWandParts(a)
-        val (dirB, folB) = extractMagicWandParts(b)
-        (dirA.union(dirB), folA.union(folB))
+        val (dirA, folA, parA) = extractMagicWandParts(a)
+        val (dirB, folB, parB) = extractMagicWandParts(b)
+        (dirA.union(dirB), folA.union(folB), parA.union(parB))
       }
-      case p: PredFieldAccTerm => (Set(p), Set())
-      case p: PredInstAccTerm => (Set(), Set(p))
-      case _ => (Set(), Set())
+      case p: PredFieldAccTerm => (Set(p), Set(), Set())
+      case p: PredInstAccTerm => (Set(), Set(p), Set())
+      case p: ImplTerm => (Set(), Set(), Set(p))
+      case _ => (Set(), Set(), Set())
     }
   }
 
@@ -104,9 +105,9 @@ object InternalFormTranslator {
       // TODO: support unfolding instructions
       case uf: Unfolding => BoolTerm(true)
       case MagicWand(left, right) => {
-        val (dirPrem, folPrem) = extractMagicWandParts(expToLogicTerm(left))
-        val (dirCons, folCons) = extractMagicWandParts(expToLogicTerm(right))
-        BaguetteMagic(dirPrem, folPrem, dirCons, folCons)
+        val (dirPrem, folPrem, parPrem) = extractMagicWandParts(expToLogicTerm(left))
+        val (dirCons, folCons, parCons) = extractMagicWandParts(expToLogicTerm(right))
+        BaguetteMagic(dirPrem, folPrem, parPrem, dirCons, folCons, parCons)
       }
       case v => throw new IllegalArgumentException(s"Unable to transform ${v.getClass.getCanonicalName} to logic term! ${exp}")
     }

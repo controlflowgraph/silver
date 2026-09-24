@@ -3,7 +3,7 @@ package viper.silver.inference.v3
 import viper.silver.ast.{Assert, FieldAccessPredicate, InferInfo, Inhale, LocalVarDecl, Method, PredicateAccess, PredicateAccessPredicate, Program, Ref, Seqn, Stmt, Type}
 import viper.silver.inference.v3.ast.{AddTerm, AndTerm, BoolTerm, EqCmpTerm, FieldAccTerm, GreaterCmpTerm, GreaterEqCmpTerm, ImplTerm, IntTerm, LessCmpTerm, LessEqCmpTerm, LogicTerm, MulTerm, NegTerm, NotEqCmpTerm, NotTerm, NullTerm, OrTerm, PermFracTerm, PredFieldAccTerm, PredInstAccTerm, SubTerm, Term, VarTerm}
 import viper.silver.inference.v3.knowledge.KnowledgeBase
-import viper.silver.verifier.{AbortedExceptionally, CliOptionError, ConsistencyError, DependencyNotFoundError, Failure, ParseReport, Success, TimeoutOccurred, TypecheckerError, TypecheckerWarning, VerificationError, Verifier, VerifierWarning}
+import viper.silver.verifier.{AbortedExceptionally, AbstractVerificationError, CliOptionError, ConsistencyError, DependencyNotFoundError, ExtensionAbstractVerificationError, Failure, ParseReport, Success, TimeoutOccurred, TypecheckerError, TypecheckerWarning, VerificationError, Verifier, VerifierWarning, errors}
 
 trait ProofResult {}
 
@@ -190,17 +190,22 @@ case class ViperReasoningEngine(verifier: Verifier, program: Program) extends Re
       new InferInfo()
     )()
 
-//    println("proof program:")
-//    println(proofProgram)
-
     val result = this.verifier.verify(proofProgram)
 
     result match {
       case Success => Sat
-      case Failure(errors) => {
-//        println(proofMethod)
-        println("errors during proof verification:")
-        errors.foreach(e => println(e.readableMessage))
+      case Failure(errs) => {
+        val unexpectedReasoningError = errs.exists {
+          case _: errors.AssertFailed => false
+          case _ => true
+        }
+        if(unexpectedReasoningError) {
+          println(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
+          println(proofMethod)
+          println("errors during proof verification:")
+          errs.foreach(e => println(s"${e.getClass.getCanonicalName} ${e.readableMessage}" ))
+          println(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
+        }
         UnSat
       }
     }
@@ -259,8 +264,16 @@ case class ViperReasoningEngine(verifier: Verifier, program: Program) extends Re
 
     result match {
       case Success => Sat
-      case Failure(errors) => {
-        println(s"pure proof errors: ${errors}")
+      case Failure(errs) => {
+        val unexpectedReasoningError = errs.exists {
+          case _: errors.AssertFailed => false
+          case _ => true
+        }
+        if(unexpectedReasoningError) {
+          println(">>>>>>>>>>>>> PURE >>>>>>>>>>>>>>>>>>>>")
+          println(proofMethod)
+          println(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
+        }
         UnSat
       }
     }
