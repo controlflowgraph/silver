@@ -180,10 +180,15 @@ case class KnowledgeBase(path: Seq[(Ident, Term)], assignment: Assignment, heap:
         //        println("CHECKING WITH CONSTANT!")
         val fracA = a.doubleValue / b.doubleValue
         val fracB = c.doubleValue / d.doubleValue
+        println(s"ORG FRAC: ${lowSimp.pretty()} <= ${highSimp.pretty()}")
+        println(s"FRACA: ${fracA}    <=    ${fracB}")
         fracA <= fracB
       case _ =>
         //        println("CHECKING WITH ENGINE!")
-        val proofResult = engine.prove(this, LessEqCmpTerm(amount, higher))
+        // this is problematic when having method stubs with malformed contracts
+//        val proofResult = engine.prove(this, LessEqCmpTerm(amount, higher))
+        val proofResult = engine.provePure(this, LessEqCmpTerm(amount, higher))
+        println(s"${}")
         proofResult == Sat
     }
   }
@@ -245,7 +250,6 @@ case class KnowledgeBase(path: Seq[(Ident, Term)], assignment: Assignment, heap:
   private def isClearlyZeroPerm(t: Term): Boolean = {
     TermRewriter.simplify(t) match {
       case PermFracTerm(IntTerm(a), _) => {
-        println(s"${t.pretty()} is clearly zero from simp")
         a.equals(BigInt.int2bigInt(0))
       }
       case _ => false
@@ -321,12 +325,18 @@ case class KnowledgeBase(path: Seq[(Ident, Term)], assignment: Assignment, heap:
     val predDef = defs(pred.name)
 
     val instantiated = predDef.instantiate(pred)
-    val direct = PredicateCollector.collectDirectPredicates(engine, instantiated, this)
-    val folded = PredicateCollector.collectFoldedPredicates(engine, instantiated, this)
-    val pure = PredicateCollector.stripToPure(engine, instantiated, this)
+    val directRaw = PredicateCollector.collectDirectPredicates(engine, instantiated, this)
+    val foldedRaw = PredicateCollector.collectFoldedPredicates(engine, instantiated, this)
+    val pureRaw = PredicateCollector.stripToPure(engine, instantiated, this)
+
+    val (kb1, folded) = TermNormalization.normalizeFoldedRequirements(this, foldedRaw)
+    val (kb2, direct) = TermNormalization.normalizeDirectRequirements(kb1, directRaw)
+    val (kb3, pure) = TermNormalization.normalizeLogicTerm(kb2, pureRaw)
+
+    // TODO: NORMALIZE THE CONTENT OF THE PREDICATE OTHERWISE IT DOES NOT PARSE CORRECTLY
 
     // exhale the folded predicate amount
-    val exhaled = this.update((a, h, d, f, i, p) => (a, h, d, f.exhale(pred, perm), i, p))
+    val exhaled = kb3.update((a, h, d, f, i, p) => (a, h, d, f.exhale(pred, perm), i, p))
 
     // TODO: check for any knowledge where access has been lost and eliminate info
     //          ---> for inhale and exhale

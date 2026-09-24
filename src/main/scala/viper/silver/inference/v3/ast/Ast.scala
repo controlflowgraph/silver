@@ -1,8 +1,9 @@
 package viper.silver.inference.v3.ast
 
 import org.apache.commons.io.filefilter.PrefixFileFilter
-import viper.silver.ast.{Add, And, BoolLit, CondExp, CurrentPerm, EqCmp, Exp, Field, FieldAccess, FieldAccessPredicate, FractionalPerm, GeCmp, GtCmp, Implies, IntLit, IntPermMul, LeCmp, LocalVar, LtCmp, MagicWand, Minus, Mul, NeCmp, Not, NullLit, Or, PermAdd, PermMinus, PermMul, PredicateAccess, PredicateAccessPredicate, Sub, Type}
+import viper.silver.ast.{Add, And, BoolLit, CondExp, CurrentPerm, EqCmp, Exp, Field, FieldAccess, FieldAccessPredicate, FractionalPerm, GeCmp, GtCmp, Implies, IntLit, IntPermMul, LeCmp, LocalVar, LtCmp, MagicWand, Minus, Mul, NeCmp, Not, NullLit, Or, PermAdd, PermMinus, PermMul, PredicateAccess, PredicateAccessPredicate, Ref, Sub, Type}
 import viper.silver.inference.v3.FixedPoint
+import viper.silver.inference.v3.knowledge.KnowledgeBase
 
 trait TermSub {
   def apply(t: Term): Term
@@ -774,4 +775,164 @@ object TermRewriter {
     })
     FixedPoint.compute(t, (p: Term) => p.substitute(func))
   }
+}
+
+object LogicTermRewriting
+{
+  private def simpConj: Seq[TermSub] = Seq(
+    FuncTermSub {
+      case AndTerm(BoolTerm(true), b) => b
+      case AndTerm(b, BoolTerm(true)) => b
+      case AndTerm(BoolTerm(false), _) => BoolTerm(false)
+      case AndTerm(_, BoolTerm(false)) => BoolTerm(false)
+      case c => c
+    }
+  )
+
+  private def simpDisj: Seq[TermSub] = Seq(
+    FuncTermSub {
+      case OrTerm(BoolTerm(false), b) => b
+      case OrTerm(b, BoolTerm(false)) => b
+      case OrTerm(BoolTerm(true), _) => BoolTerm(true)
+      case OrTerm(_, BoolTerm(true)) => BoolTerm(true)
+      case c => c
+    }
+  )
+
+  private def simpEquiv: Seq[TermSub] = Seq(
+    FuncTermSub {
+      case EqCmpTerm(a, b) if a.equals(b) => BoolTerm(true)
+      case NotEqCmpTerm(a, b) if a.equals(b) => BoolTerm(false)
+      case c => c
+    }
+  )
+
+
+
+  private def containsLT(term: Term, pattern: LogicTerm): Boolean = {
+    term match {
+      case lt: LogicTerm => {
+        if(term.equals(pattern)){
+          true
+        }
+        else {
+          lt match {
+            case AndTerm(a, b) => containsLT(a, pattern) || containsLT(b, pattern)
+            case BaguetteMagic(directPrem, foldedPrem, directCons, foldedCons) => {
+              directPrem.exists(a => containsLT(a, pattern)) ||
+              foldedPrem.exists(a => containsLT(a, pattern)) ||
+              directCons.exists(a => containsLT(a, pattern)) ||
+              foldedCons.exists(a => containsLT(a, pattern))
+            }
+            case BoolTerm(value) => false
+            case EqCmpTerm(a, b) => containsLT(a, pattern) || containsLT(b, pattern)
+            case GreaterCmpTerm(a, b) => containsLT(a, pattern) || containsLT(b, pattern)
+            case GreaterEqCmpTerm(a, b) => containsLT(a, pattern) || containsLT(b, pattern)
+            case ImplTerm(prem, cons) => containsLT(prem, pattern) || containsLT(cons, pattern)
+            case LessCmpTerm(a, b) => containsLT(a, pattern) || containsLT(b, pattern)
+            case LessEqCmpTerm(a, b) => containsLT(a, pattern) || containsLT(b, pattern)
+            case NotEqCmpTerm(a, b) => containsLT(a, pattern) || containsLT(b, pattern)
+            case NotTerm(t) => false
+            case OrTerm(a, b) => containsLT(a, pattern) || containsLT(b, pattern)
+            case PredFieldAccTerm(exp, perm) => containsLT(exp, pattern) || containsLT(perm, pattern)
+            case PredInstAccTerm(pred, perm) => pred.args.exists(a => containsLT(a, pattern)) || containsLT(perm, pattern)
+            case VarTerm(name, typ) => false
+            case _ => false
+          }
+        }
+      }
+      case _ => false
+    }
+  }
+
+  private def collectApplicable(lt: LogicTerm): Option[(Term, Term)] = {
+    lt match {
+      case AndTerm(a, b) => collectApplicable(a).orElse(collectApplicable(b))
+      case BaguetteMagic(directPrem, foldedPrem, directCons, foldedCons) => None
+      case BoolTerm(value) => None
+      case EqCmpTerm(v@VarTerm(n, _), b) if n.startsWith("t$") && !containsLT(b, v) => Some((v, b))
+      case EqCmpTerm(a, b) => None
+      case GreaterCmpTerm(a, b) => None
+      case GreaterEqCmpTerm(a, b) => None
+      case ImplTerm(prem, cons) => None
+      case LessCmpTerm(a, b) => None
+      case LessEqCmpTerm(a, b) => None
+      case NotEqCmpTerm(a, b) => None
+      case NotTerm(t) => None
+      case OrTerm(a, b) => None
+      case PredFieldAccTerm(exp, perm) => None
+      case PredInstAccTerm(pred, perm) => None
+      case VarTerm(name, typ) => None
+      case _ => None
+    }
+  }
+
+  def simplify(t: LogicTerm): LogicTerm = {
+    // to use this for a simplification of the knowledge base the info about the values in the heap needs to be retained compared to just simplifying to true :)
+    // collect the equivalences and process a knowledge base afterward
+    val subs = Seq(
+      simpConj,
+      simpDisj,
+      simpEquiv
+    ).flatten
+    val func = FuncTermSub(f => {
+      subs.foldLeft(f)((v, q) => v.substitute(q))
+    })
+    FixedPoint.compute(t, (q: LogicTerm) => {
+      val res = FixedPoint.compute(q, (p: LogicTerm) => p.substitute(func).asInstanceOf[LogicTerm])
+      val fp = FixedPoint.compute(res, (t: LogicTerm) => {
+        val repl = collectApplicable(t)
+        repl.map(r => t.substitute(MapTermSub(Map((r._1, r._2)))).asInstanceOf[LogicTerm]).getOrElse(t)
+      })
+      fp
+    })
+  }
+
+  def untangle(kb: KnowledgeBase): Unit = {
+    // to use this for a simplification of the knowledge base the info about the values in the heap needs to be retained compared to just simplifying to true :)
+    // collect the equivalences and process a knowledge base afterward
+    val subs = Seq(
+      simpConj,
+      simpDisj,
+      simpEquiv
+    ).flatten
+    val func = FuncTermSub(f => {
+      subs.foldLeft(f)((v, q) => v.substitute(q))
+    })
+
+    var replacements = Seq[(Term, Term)]()
+    var current = kb.info
+    var running = true
+    while(running) {
+      val res = FixedPoint.compute(current, (p: LogicTerm) => p.substitute(func).asInstanceOf[LogicTerm])
+      val fp = FixedPoint.compute((res, Seq[(Term, Term)]()), (acc: (LogicTerm, Seq[(Term, Term)])) => {
+        val (t, s) = acc
+        val repl = collectApplicable(t)
+        repl match {
+          case Some(r) => {
+            val res = t.substitute(MapTermSub(Map((r._1, r._2)))).asInstanceOf[LogicTerm]
+            (res, s ++ Seq(r))
+          }
+          case None => acc
+        }
+      })
+
+      running = !fp._1.equals(current)
+      current = fp._1
+      replacements = replacements ++ fp._2
+    }
+
+    println(s"REPLACEMENTS DURING UNTANGLE:")
+    replacements.foreach(a => println(s"${a._1.pretty()} => ${a._2.pretty()}"))
+    println(s"RESULT INFO: ${current.pretty()}")
+
+    val allRefsInHeap = kb.heap.objMap.keySet.map(a => a.toVarTerm(Ref))
+      .union(kb.heap.objMap.values.flatMap(o => o.fields.map(e => e._2.toVarTerm(kb.fieldTypes(e._1)))).toSet)
+    println("REMAPPED:")
+    allRefsInHeap.map(a => (a, FixedPoint.compute(a, (a: Term) => a.substitute(MapTermSub(replacements.toMap)))))
+      .foreach(e => println(s"${e._1.pretty()} == ${e._2.pretty()}"))
+
+
+  }
+
 }

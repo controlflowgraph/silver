@@ -3,7 +3,7 @@ package viper.silver.inference.v3
 import viper.silver.ast.{Assert, FieldAccessPredicate, InferInfo, Inhale, LocalVarDecl, Method, PredicateAccess, PredicateAccessPredicate, Program, Ref, Seqn, Stmt, Type}
 import viper.silver.inference.v3.ast.{AddTerm, AndTerm, BoolTerm, EqCmpTerm, FieldAccTerm, GreaterCmpTerm, GreaterEqCmpTerm, ImplTerm, IntTerm, LessCmpTerm, LessEqCmpTerm, LogicTerm, MulTerm, NegTerm, NotEqCmpTerm, NotTerm, NullTerm, OrTerm, PermFracTerm, PredFieldAccTerm, PredInstAccTerm, SubTerm, Term, VarTerm}
 import viper.silver.inference.v3.knowledge.KnowledgeBase
-import viper.silver.verifier.{Failure, Success, Verifier}
+import viper.silver.verifier.{AbortedExceptionally, CliOptionError, ConsistencyError, DependencyNotFoundError, Failure, ParseReport, Success, TimeoutOccurred, TypecheckerError, TypecheckerWarning, VerificationError, Verifier, VerifierWarning}
 
 trait ProofResult {}
 
@@ -17,8 +17,10 @@ object UnSat extends ProofResult {}
 object PotSat extends ProofResult {}
 
 trait ReasoningEngine {
+  def proveWithPotential(kb: KnowledgeBase, target: LogicTerm): ProofResult
   def prove(kb: KnowledgeBase, target: LogicTerm): ProofResult
 
+  def provePureWithPotential(kb: KnowledgeBase, target: LogicTerm): ProofResult
   def provePure(kb: KnowledgeBase, target: LogicTerm): ProofResult
 }
 
@@ -81,12 +83,12 @@ case class ViperReasoningEngine(verifier: Verifier, program: Program) extends Re
     joinAll(combined)
   }
 
-  def prove(kb: KnowledgeBase, target: LogicTerm): ProofResult = {
-    val resNormal = proveDirect(kb, target)
+  def proveWithPotential(kb: KnowledgeBase, target: LogicTerm): ProofResult = {
+    val resNormal = prove(kb, target)
     resNormal match {
       case Sat => Sat
       case UnSat => {
-        val resNegated = proveDirect(kb, NotTerm(target))
+        val resNegated = prove(kb, NotTerm(target))
         resNegated match {
           case Sat => UnSat
           case UnSat => PotSat
@@ -95,7 +97,7 @@ case class ViperReasoningEngine(verifier: Verifier, program: Program) extends Re
     }
   }
 
-  def proveDirect(kb: KnowledgeBase, target: LogicTerm): ProofResult = {
+  def prove(kb: KnowledgeBase, target: LogicTerm): ProofResult = {
     // get the variables used in all kinds of terms in the knowledge base
     val usedVars = getVariablesOfKnowledgeBase(kb.fieldTypes, kb)
     val decls = usedVars.map(e => LocalVarDecl(e.name, e.typ)()).toSeq
@@ -174,9 +176,6 @@ case class ViperReasoningEngine(verifier: Verifier, program: Program) extends Re
       decls
     )()
 
-//    println(s"INTERMEDIATE PROOF: ${target.pretty()}")
-//    println(body)
-
     val proofMethod = Method("proof", Seq(), Seq(), Seq(), Seq(), Some(body))()
 
     val methods = methodStubs ++ Seq(proofMethod)
@@ -191,13 +190,33 @@ case class ViperReasoningEngine(verifier: Verifier, program: Program) extends Re
       new InferInfo()
     )()
 
-    val result = this.verifier.verify(proofProgram)
+//    println("proof program:")
+//    println(proofProgram)
 
-//    println(s"VERIFICATION RESULT: ${result}")
+    val result = this.verifier.verify(proofProgram)
 
     result match {
       case Success => Sat
-      case Failure(errors) => UnSat
+      case Failure(errors) => {
+//        println(proofMethod)
+        println("errors during proof verification:")
+        errors.foreach(e => println(e.readableMessage))
+        UnSat
+      }
+    }
+  }
+
+  def provePureWithPotential(kb: KnowledgeBase, target: LogicTerm): ProofResult = {
+    val resNormal = provePure(kb, target)
+    resNormal match {
+      case Sat => Sat
+      case UnSat => {
+        val resNegated = provePure(kb, NotTerm(target))
+        resNegated match {
+          case Sat => UnSat
+          case UnSat => PotSat
+        }
+      }
     }
   }
 
@@ -222,10 +241,7 @@ case class ViperReasoningEngine(verifier: Verifier, program: Program) extends Re
       decls
     )()
 
-    println(s"INTERMEDIATE PROOF: ${target.pretty()}")
-    println(body)
-
-    val proofMethod = Method("proof", Seq(), Seq(), Seq(), Seq(), Some(body))()
+    val proofMethod = Method("proof_pure", Seq(), Seq(), Seq(), Seq(), Some(body))()
 
     val methods = Seq(proofMethod)
 
@@ -239,12 +255,7 @@ case class ViperReasoningEngine(verifier: Verifier, program: Program) extends Re
       new InferInfo()
     )()
 
-    println("PROOF PROGRAM:")
-    println(proofProgram)
-
     val result = this.verifier.verify(proofProgram)
-
-    //    println(s"VERIFICATION RESULT: ${result}")
 
     result match {
       case Success => Sat

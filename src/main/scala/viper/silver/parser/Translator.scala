@@ -340,7 +340,7 @@ case class Translator(program: PProgram) {
 
   private def translate(m: PMethod): Method = m match {
     case PMethod(_, _, idndef, gens, args, rets, pres, posts, body) =>
-      instantiateMethodTemplate(idndef.name, args.inner.toSeq.map(_.typ))
+      instantiateMethodTemplate(idndef.name, args.inner.toSeq.map(_.typ), rets.map(a => a.formalReturns.inner.toSeq.map(b => b.typ)).getOrElse(Seq()))
 
       //      val m = findMethod(idndef)
       //      val genericParameters = gens.map(v => v.inner.toSeq).getOrElse(Nil).map(a => a.idndef.name)
@@ -431,6 +431,9 @@ case class Translator(program: PProgram) {
         Predicate(name, pp.formalArgs map liftArgDecl, null)(pos, Translator.toInfo(p.annotations, pp))
       case pm: PMethod =>
         pm.args.inner.toSeq.map(d => d.typ)
+          .map(a => ttyp(a))
+          .foreach(t => instantiateDatatypeTemplate(t))
+        pm.formalReturns.map(d => d.typ)
           .map(a => ttyp(a))
           .foreach(t => instantiateDatatypeTemplate(t))
         Method(name, pm.formalArgs map liftArgDecl, pm.formalReturns map liftReturnDecl, null, null, null)(pos, Translator.toInfo(p.annotations, pm))
@@ -623,7 +626,7 @@ case class Translator(program: PProgram) {
       })
 
     /* TODO: REINTRODUCE WHEN NOT INSERTED BLINDLY: Seq(finalPredAccess) */
-    val postconditions = Seq()  ++ valParamEqValInObj ++ permParamEqValInObj
+    val postconditions = Seq() /* Seq(finalPredAccess) ++ valParamEqValInObj ++ permParamEqValInObj*/
 
     val objValFields = instantiated.content
       .map(v => {
@@ -675,9 +678,6 @@ case class Translator(program: PProgram) {
   }
 
   def addMember(m: Member): Unit = {
-    println("ADDING MEMBERS:")
-    println(m)
-
     members.put(m.name, m)
   }
 
@@ -688,7 +688,7 @@ case class Translator(program: PProgram) {
   }
 
   def instantiateDatatypeTemplate(typ: Type) = {
-    // TODO CFG: ADD METHOD TO MAKE AN INSTANCE WHICH IS A STUB WITH NO BODY
+    println(s"-------------------> INSTANTIATING FOR TYPE: ${typ}")
     typ match {
       case d: DatatypeType => {
         if (!(instantiatedDatatypes.contains(typ))) {
@@ -720,7 +720,7 @@ case class Translator(program: PProgram) {
     }
   }
 
-  def instantiateMethodTemplate(methodName: String, args: Seq[PType]): Unit = {
+  def instantiateMethodTemplate(methodName: String, args: Seq[PType], rets: Seq[PType]): Unit = {
     //    println(s"instantiating method ${methodName} with ${args}")
     val temp = getMethodTemplate(methodName)
     val error = (node: PNode) => (msg: String) => {
@@ -730,6 +730,10 @@ case class Translator(program: PProgram) {
     //    println(s"UNIFICATION RESULT: ${result}")
     // instantiating the datatype instances of the arguments
     args.foreach(a => {
+      instantiateDatatypeTemplate(ttyp(a))
+    })
+
+    rets.foreach(a => {
       instantiateDatatypeTemplate(ttyp(a))
     })
 
@@ -817,7 +821,7 @@ case class Translator(program: PProgram) {
     val info = if (annotations.isEmpty) sourcePNodeInfo else ConsInfo(sourcePNodeInfo, AnnotationInfo(annotations))
     s match {
       case PAssign(targets, _, PCall(method, args, _)) if coreMethods.contains(method.name) => {
-        instantiateMethodTemplate(method.name, args.inner.toSeq.map(e => e.typ))
+        instantiateMethodTemplate(method.name, args.inner.toSeq.map(e => e.typ), Seq())
         val methodName = method.name + "$" + encodeTypeListAsString(args.inner.toSeq.map(e => e.typ).map(ttyp))
         val foundMethod = members(methodName).asInstanceOf[Method]
         //        println(s"calling method: ${methodName}")

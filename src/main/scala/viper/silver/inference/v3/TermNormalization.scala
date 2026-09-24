@@ -27,6 +27,9 @@ object TermNormalization {
     val (kbA, refA, typA, infoA) = computeNormalizedValueRef(kb, counter, left)
     val (kbB, refB, typB, infoB) = computeNormalizedValueRef(kbA, counter, right)
     val ref = counter.freshValRef()
+    if(!typeMapping.contains(typA, typB)){
+      println(s"ERROR WHEN ${left.pretty()}   ${right.pretty()}")
+    }
     val resType = typeMapping(typA, typB)
     val valRefVar = ref.toVarTerm(resType)
     val valRefVarA = refA.toVarTerm(typA)
@@ -40,12 +43,12 @@ object TermNormalization {
     (kb, ref, resType, EqCmpTerm(valRefVar, lit))
   }
 
-  private def computeNormalizedUnaryOperator(kb: KnowledgeBase, counter: RefCounter, resType: Type, sub: Term, op: Term => Term): (KnowledgeBase, ValRef, Type, LogicTerm) = {
+  private def computeNormalizedUnaryOperator(kb: KnowledgeBase, counter: RefCounter, sub: Term, op: Term => Term): (KnowledgeBase, ValRef, Type, LogicTerm) = {
     val (kbS, refS, typS, infoS) = computeNormalizedValueRef(kb, counter, sub)
     val ref = counter.freshValRef()
-    val valRefVar = ref.toVarTerm(resType)
+    val valRefVar = ref.toVarTerm(typS)
     val valRefVarSub = refS.toVarTerm(typS)
-    (kbS, ref, resType, infoS.and(EqCmpTerm(valRefVar, op(valRefVarSub))))
+    (kbS, ref, typS, infoS.and(EqCmpTerm(valRefVar, op(valRefVarSub))))
   }
 
   def computeNormalizedLogicTerm(kb: KnowledgeBase, counter: RefCounter, term: LogicTerm): (KnowledgeBase, ValRef, Type, LogicTerm) = {
@@ -58,13 +61,23 @@ object TermNormalization {
       case LessCmpTerm(a, b) => computeNormalizedBinaryOperator(kb, counter, viper.silver.ast.Bool, a, b, LessCmpTerm)
       case LessEqCmpTerm(a, b) => computeNormalizedBinaryOperator(kb, counter, viper.silver.ast.Bool, a, b, LessEqCmpTerm)
       case NotEqCmpTerm(a, b) => computeNormalizedBinaryOperator(kb, counter, viper.silver.ast.Bool, a, b, NotEqCmpTerm)
-      case NotTerm(t) => computeNormalizedUnaryOperator(kb, counter, viper.silver.ast.Bool, t, v => NotTerm(v.asInstanceOf[LogicTerm]))
+      case NotTerm(t) => computeNormalizedUnaryOperator(kb, counter, t, v => NotTerm(v.asInstanceOf[LogicTerm]))
       case OrTerm(a, b) => computeNormalizedBinaryOperator(kb, counter, viper.silver.ast.Bool, a, b, (a, b) => OrTerm(a.asInstanceOf[LogicTerm], b.asInstanceOf[LogicTerm]))
-      case VarTerm(name, typ) =>
-        val lookupResult = kb.assignment.lookup(name, typ)
-        val valRef = lookupResult._2
-        val ukb = kb.withAssignment(lookupResult._1)
-        (ukb, valRef, typ, BoolTerm(true))
+      case v@VarTerm(name, typ) =>
+        if (name.startsWith("t$")) {
+          // if the variable is already a temporary variable then it has a corresponding val ref
+          val id = Integer.parseInt(name.substring(2))
+          val valRef = ValRef(id)
+          (kb, valRef, typ, BoolTerm(true))
+        }
+        else {
+          // if the variable is a program variable then the val ref is computed by a lookup in the current assignment
+          val lookupResult = kb.assignment.lookup(name, typ)
+          val valRef = lookupResult._2
+          val ukb = kb.withAssignment(lookupResult._1)
+          (ukb, valRef, typ, BoolTerm(true))
+        }
+
       case c =>
         throw new IllegalArgumentException(s"Unable to compute normalized form for logic term of type ${c.getClass.getCanonicalName}")
     }
@@ -95,7 +108,7 @@ object TermNormalization {
           ((viper.silver.ast.Int, viper.silver.ast.Int), viper.silver.ast.Int)
         )
         computeNormalizedBinaryOperatorWithTypeMapping(kb, counter, mapping, a, b, MulTerm)
-      case NegTerm(t) => computeNormalizedUnaryOperator(kb, counter, viper.silver.ast.Int, t, NegTerm)
+      case NegTerm(t) => computeNormalizedUnaryOperator(kb, counter, t, NegTerm)
       case lit: NullTerm => computeNormalizedLiteral(kb, counter, viper.silver.ast.Ref, lit)
       case PermFracTerm(a, b) => computeNormalizedBinaryOperator(kb, counter, viper.silver.ast.Perm, a, b, PermFracTerm)
       case SubTerm(a, b) => computeNormalizedBinaryOperator(kb, counter, viper.silver.ast.Int, a, b, SubTerm)
@@ -279,7 +292,7 @@ object TermNormalization {
         val (kbB, normB) = normalizeMutablePartsInLogicTerm(kbA, b)
         (kbB, OrTerm(normA, normB))
       }
-      case NotTerm(t) =>{
+      case NotTerm(t) => {
         val (kbT, normT) = normalizeMutablePartsInLogicTerm(kb, t)
         (kbT, NotTerm(normT))
       }
@@ -293,5 +306,73 @@ object TermNormalization {
       case c =>
         throw new IllegalArgumentException(s"Unable to normalize mutable parts in logic term of type ${logic.getClass.getCanonicalName}")
     }
+  }
+
+  def normalizeLogicTerm(before: KnowledgeBase, term: LogicTerm): (KnowledgeBase, LogicTerm) = {
+    val (kbT, refT, typT, infoT) = TermNormalization.computeNormalizedLogicTerm(before, before.assignment.rc, term)
+    val resKb = kbT.extendInfo(infoT)
+    val variable = refT.toVarTerm(typT)
+    (resKb, variable)
+  }
+
+  def normalizeTerm(before: KnowledgeBase, term: Term): (KnowledgeBase, Term) = {
+    val (kbT, refT, typT, infoT) = TermNormalization.computeNormalizedValueRef(before, before.assignment.rc, term)
+    val resKb = kbT.extendInfo(infoT)
+    val variable = refT.toVarTerm(typT)
+    (resKb, variable)
+  }
+
+  def normalizeTermList(before: KnowledgeBase, terms: Seq[Term]): (KnowledgeBase, Seq[Term]) = {
+    terms.foldLeft((before, Seq[Term]()))((acc, t) => {
+      val (resKb, variable) = normalizeTerm(acc._1, t)
+      (resKb, acc._2 ++ Seq(variable))
+    })
+  }
+
+  def normalizeFoldedRequirements(before: KnowledgeBase, reqs: Seq[PredInstAccTerm]): (KnowledgeBase, Seq[PredInstAccTerm]) = {
+    reqs.foldLeft((before, Seq[PredInstAccTerm]()))((acc, r) => {
+      val (resKb, args) = normalizeTermList(acc._1, r.pred.args)
+      val (kb, perm) = normalizeTerm(resKb, r.perm)
+      val pred = PredInstAccTerm(PredInst(r.pred.name, args), perm)
+      (kb, acc._2 ++ Seq(pred))
+    })
+  }
+
+  def normalizeDirectRequirements(before: KnowledgeBase, reqs: Seq[PredFieldAccTerm]): (KnowledgeBase, Seq[PredFieldAccTerm]) = {
+    reqs.foldLeft((before, Seq[PredFieldAccTerm]()))((acc, f) => {
+      val (inter, src) = normalizeTerm(acc._1, f.exp.src)
+      val (resKb, _) = normalizeTerm(inter, f.exp)
+      val (kb, perm) = normalizeTerm(resKb, f.perm)
+      val pred = PredFieldAccTerm(
+        FieldAccTerm(
+          src,
+          f.exp.field,
+          f.exp.typ
+        ),
+        perm
+      )
+      (kb, acc._2 ++ Seq(pred))
+    })
+  }
+
+  def normalizeBaguetteRequirements(before: KnowledgeBase, reqs: Seq[BaguetteMagic]): (KnowledgeBase, Seq[BaguetteMagic]) = {
+    reqs.foldLeft((before, Seq[BaguetteMagic]()))((acc, f) => {
+      val (kb1, dirPrem) = normalizeDirectRequirements(before, f.directPrem.toSeq)
+      val (kb2, folPrem) = normalizeFoldedRequirements(kb1, f.foldedPrem.toSeq)
+      val (kb3, dirCons) = normalizeDirectRequirements(kb2, f.directCons.toSeq)
+      val (kb4, folCons) = normalizeFoldedRequirements(kb3, f.foldedCons.toSeq)
+
+      (kb4, acc._2 ++ Seq(BaguetteMagic(dirPrem.toSet, folPrem.toSet, dirCons.toSet, folCons.toSet)))
+    })
+
+  }
+
+  def normalizePotentialRequirements(before: KnowledgeBase, reqs: Seq[ImplTerm]): (KnowledgeBase, Seq[ImplTerm]) = {
+    reqs.foldLeft((before, Seq[ImplTerm]()))((acc, i) => {
+      val (kb1, prem) = TermNormalization.normalizeMutablePartsInLogicTerm(acc._1, i.prem)
+      val (kb2, cons) = TermNormalization.normalizeMutablePartsInLogicTerm(kb1, i.cons)
+      val impl = ImplTerm(prem, cons)
+      (kb2, acc._2 ++ Seq(impl))
+    })
   }
 }

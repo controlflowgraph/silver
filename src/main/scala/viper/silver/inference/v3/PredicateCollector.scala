@@ -15,7 +15,7 @@ object PredicateCollector {
       case _: NotEqCmpTerm => Seq()
       case AndTerm(a, b) => collectPotSatImpls(engine, a, kb) ++ collectPotSatImpls(engine, b, kb)
       case impl@ImplTerm(prem, _) => {
-        if (engine.prove(kb, prem) == PotSat) Seq(impl)
+        if (engine.proveWithPotential(kb, prem) == PotSat) Seq(impl)
         else Seq()
       }
       case NotTerm(t) => {
@@ -59,7 +59,7 @@ object PredicateCollector {
       case _: NotEqCmpTerm => Seq()
       case AndTerm(a, b) => collectDirectPredicates(engine, a, kb) ++ collectDirectPredicates(engine, b, kb)
       case ImplTerm(prem, cons) => {
-        if (engine.prove(kb, prem) == Sat) collectDirectPredicates(engine, cons, kb)
+        if (engine.proveWithPotential(kb, prem) == Sat) collectDirectPredicates(engine, cons, kb)
         else Seq()
       }
       case NotTerm(t) => {
@@ -105,7 +105,7 @@ object PredicateCollector {
         val dnfB = stripToPure(engine, b, kb)
         AndTerm(dnfA, dnfB)
       case ImplTerm(prem, cons) =>
-        if (engine.prove(kb, prem) == Sat) stripToPure(engine, cons, kb)
+        if (engine.proveWithPotential(kb, prem) == Sat) stripToPure(engine, cons, kb)
         else BoolTerm(true)
       case NotTerm(t) => NotTerm(stripToPure(engine, t, kb))
       case OrTerm(a, b) =>
@@ -134,7 +134,7 @@ object PredicateCollector {
       case _: NotEqCmpTerm => Seq()
       case AndTerm(a, b) => collectFoldedPredicates(engine, a, kb) ++ collectFoldedPredicates(engine, b, kb)
       case ImplTerm(prem, cons) =>
-        if (engine.prove(kb, prem) == Sat) collectFoldedPredicates(engine, cons, kb)
+        if (engine.proveWithPotential(kb, prem) == Sat) collectFoldedPredicates(engine, cons, kb)
         else Seq()
       case NotTerm(t) =>
         val included = collectFoldedPredicates(engine, t, kb)
@@ -173,7 +173,7 @@ object PredicateCollector {
       case _: NotEqCmpTerm => Seq()
       case AndTerm(a, b) => collectBaguettes(engine, a, kb) ++ collectBaguettes(engine, b, kb)
       case ImplTerm(prem, cons) =>
-        if (engine.prove(kb, prem) == Sat) collectBaguettes(engine, cons, kb)
+        if (engine.proveWithPotential(kb, prem) == Sat) collectBaguettes(engine, cons, kb)
         else Seq()
       case NotTerm(t) =>
         val included = collectBaguettes(engine, t, kb)

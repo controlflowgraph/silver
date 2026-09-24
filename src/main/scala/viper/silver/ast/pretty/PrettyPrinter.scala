@@ -671,7 +671,7 @@ object FastPrettyPrinter extends FastPrettyPrinterBase with BracketPrettyPrinter
       case Injection(value) => text(s"injection ${value}")
       case NewStmt(target, fields) =>
         show(target) <+> ":=" <+> "new(" <> ssep(fields map (f => value(f.name)), char(',') <> space) <> ")"
-      case LocalVarAssign(lhs, rhs) => show(lhs) <+> "(: " <+> show(lhs.typ) <+> ")" <+> ":=" <+> nest(defaultIndent, show(rhs))
+      case LocalVarAssign(lhs, rhs) => show(lhs) /*<+> "(: " <+> show(lhs.typ) <+> ")"*/ <+> ":=" <+> nest(defaultIndent, show(rhs))
       case FieldAssign(lhs, rhs) => show(lhs) <+> ":=" <+> nest(defaultIndent, show(rhs))
       case Fold(e) => text("fold") <+> nest(defaultIndent, show(e))
       case Unfold(e) => text("unfold") <+> nest(defaultIndent, show(e))
@@ -783,7 +783,7 @@ object FastPrettyPrinter extends FastPrettyPrinterBase with BracketPrettyPrinter
       case NullLit() => value(null)
       case AbstractLocalVar(n) => n
       case FieldAccess(rcv, field) =>
-        show(rcv) <> "." <> field.name <> "(: " <> show(field.typ) <> ")"
+        show(rcv) <> "." <> field.name /*<> "(: " <> show(field.typ) <> ")"*/
       case PredicateAccess(params, predicateName) =>
         text(predicateName) <> parens(ssep(params map show, group(char (',') <> line)))
       case Unfolding(acc, exp) =>
