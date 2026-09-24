@@ -2,7 +2,7 @@ package viper.silver.inference.v3.knowledge
 
 import viper.silver.ast.{Ref, Type}
 import viper.silver.inference.v3.{FoldingStep, MagicWandManager, PredicateCollector, ReasoningEngine, RefCounter, RefoldingStep, RefoldingStrategy, Sat, TermNormalization, UnSat, UnfoldingStep, ValRef}
-import viper.silver.inference.v3.ast.{AndTerm, BaguetteMagic, BoolTerm, EqCmpTerm, FieldAccTerm, GreaterCmpTerm, Ident, IntTerm, InternalMethod, LessEqCmpTerm, LogicTerm, MapTermSub, MulTerm, PermFracTerm, PredDef, PredFieldAccTerm, PredInst, PredInstAccTerm, Term, TermRewriter, TermSub, VarTerm}
+import viper.silver.inference.v3.ast.{AndTerm, BaguetteMagic, BoolTerm, EqCmpTerm, FieldAccTerm, GreaterCmpTerm, Ident, ImplTerm, IntTerm, InternalMethod, LessEqCmpTerm, LogicTerm, MapTermSub, MulTerm, PermFracTerm, PredDef, PredFieldAccTerm, PredInst, PredInstAccTerm, Term, TermRewriter, TermSub, VarTerm}
 
 import scala.collection.mutable
 
@@ -213,6 +213,29 @@ case class KnowledgeBase(path: Seq[(Ident, Term)], assignment: Assignment, heap:
   }
 
 
+  def findUnfoldingStrategyInPredicate(engine: ReasoningEngine, defs: Map[String, PredDef], impl: ImplTerm, instance: PredInstAccTerm): Option[RefoldingStep] = {
+    val predDef = defs(instance.pred.name)
+    val instantiated = predDef.instantiate(instance.pred)
+    // TODO: EXTEND THE KNOWLEDGE WITH THE PURE INFORMATION WHEN UNFOLDING
+    val pure = PredicateCollector.stripToPure(engine, instantiated, this)
+
+    val direct = PredicateCollector.collectDirectPredicates(engine, instantiated, this)
+    val folded = PredicateCollector.collectFoldedPredicates(engine, instantiated, this)
+    val partial = PredicateCollector.collectPotSatImpls(engine, instantiated, this)
+    val subs = folded.flatMap(v => findUnfoldingStrategyInPredicate(engine, defs, impl, v))
+
+    val containedOnDirectLevel = partial.exists(v => v.equals(impl))
+    val containedOnSubLevel = subs.nonEmpty
+
+    if (containedOnDirectLevel || containedOnSubLevel) {
+      Some(UnfoldingStep(instance.pred, instance.perm, subs))
+    }
+    else {
+      None
+    }
+  }
+
+
   def findUnfoldingStrategyInPredicate(engine: ReasoningEngine, defs: Map[String, PredDef], fa: PredFieldAccTerm, instance: PredInstAccTerm): Option[RefoldingStep] = {
     val predDef = defs(instance.pred.name)
     val instantiated = predDef.instantiate(instance.pred)
@@ -292,6 +315,29 @@ case class KnowledgeBase(path: Seq[(Ident, Term)], assignment: Assignment, heap:
     //    findUnfoldingStrategyInPredicate(engine, defs, )
     None
   }
+
+
+  def findUnfoldingStrategy(engine: ReasoningEngine, defs: Map[String, PredDef], impl: ImplTerm): Option[RefoldingStrategy] = {
+    // TODO: check if it is even possible that the permission amount is reachable
+    if (this.partial.partial.contains(impl)) {
+      Some(RefoldingStrategy(Seq()))
+    }
+    else {
+      val mapped: Seq[PredInstAccTerm] = this.folded.permissions.map(e => PredInstAccTerm(e._1, e._2))
+        .filter(i => !isClearlyZeroPerm(i.perm))
+        .filter(i => isNotZeroPerm(engine, i.perm))
+        .toSeq
+
+      val strats = mapped.flatMap(v => findUnfoldingStrategyInPredicate(engine, defs, impl, v))
+      if (strats.nonEmpty) {
+        Some(RefoldingStrategy(strats))
+      }
+      else {
+        None
+      }
+    }
+  }
+
 
 
   def findUnfoldingStrategy(engine: ReasoningEngine, defs: Map[String, PredDef], fa: PredFieldAccTerm): Option[RefoldingStrategy] = {
@@ -420,18 +466,33 @@ case class KnowledgeBase(path: Seq[(Ident, Term)], assignment: Assignment, heap:
   private def attemptRefolding(engine: ReasoningEngine, defs: Map[String, PredDef], f: PredInstAccTerm): Option[RefoldingStrategy] = {
     val predDef = defs(f.pred.name)
 
+    // todo: normalization of internals might lead to duplicate initialization of field temp variables
     val instantiated = predDef.instantiate(f.pred)
-    val direct = PredicateCollector.collectDirectPredicates(engine, instantiated, this)
-    val folded = PredicateCollector.collectFoldedPredicates(engine, instantiated, this)
-    val pure = PredicateCollector.stripToPure(engine, instantiated, this)
+    val rawFolded = PredicateCollector.collectFoldedPredicates(engine, instantiated, this)
+    val rawDirect = PredicateCollector.collectDirectPredicates(engine, instantiated, this)
+    val rawStripped = PredicateCollector.stripToPure(engine, instantiated, this)
+    val rawPartial = PredicateCollector.collectPotSatImpls(engine, instantiated, this)
+    val rawMagic = PredicateCollector.collectBaguettes(engine, instantiated, this)
 
-    val mappedDirect = direct.map(d => findUnfoldingStrategy(engine, defs, d))
-    val mappedFolded = folded.map(f => findRefoldingStrategy(engine, defs, f))
+    val (kb1, folded) = TermNormalization.normalizeFoldedRequirements(this, rawFolded)
+    val (kb2, direct) = TermNormalization.normalizeDirectRequirements(kb1, rawDirect)
+    val (kb3, stripped) = TermNormalization.normalizeLogicTerm(kb2, rawStripped)
+    val (kb33, partial) = TermNormalization.normalizePotentialRequirements(kb3, rawPartial)
+    val (kb4, baguettes) = TermNormalization.normalizeBaguetteRequirements(kb33, rawMagic)
+
+
+    println(s"CHECKING FOR PARTIAL IN THE REFOLDING STRATEGY:")
+    println(f.pretty())
+    partial.foreach(p => println(p.pretty()))
+
+    val mappedDirect = direct.map(d => kb4.findUnfoldingStrategy(engine, defs, d))
+    val mappedFolded = folded.map(f => kb4.findRefoldingStrategy(engine, defs, f))
+    val mappedPartial = partial.map(p => kb4.findUnfoldingStrategy(engine, defs, p))
 
     println(s"CHECKING FOR DIRECT REQUIREMENTS:")
     println(s"${direct.zip(mappedDirect).map(v => s"${v._1.pretty()}   =>  ${v._2}").mkString("\n").indent(2)}")
 
-    mergeRefoldingStrategyOptions(mappedDirect ++ mappedFolded)
+    mergeRefoldingStrategyOptions(mappedDirect ++ mappedFolded ++ mappedPartial)
       .map(r => RefoldingStrategy(r.steps ++ Seq(FoldingStep(f.pred, f.perm))))
   }
 

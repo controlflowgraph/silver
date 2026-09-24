@@ -749,7 +749,14 @@ case class MethodInference(engine: ReasoningEngine,
         .getOrElse(kb)
     })
 
-    val afterPartialRemoval = afterRefolding.withPartial(afterRefolding.partial.exhale(partial))
+    val afterPartial = partial.foldLeft(afterRefolding)((kb, p) => {
+      kb.findUnfoldingStrategy(this.engine, this.defs, p)
+        .map(s => applyRefoldingStrategy(this.engine, inj, kb, s))
+        .getOrElse(kb)
+    })
+
+    val afterPartialRemoval = afterPartial.withPartial(afterPartial.partial.exhale(partial))
+    println(s"REMOVING PARTIAL: ${partial.map(_.pretty()).mkString(" & ")}")
     val afterBaguetteRemoval = afterPartialRemoval.withMWM(baguettes.foldLeft(afterPartialRemoval.mwm)((a, b) => a.removeWand(b)))
 
     // TODO: detect that the predicate permissions are not fulfilled
@@ -1404,20 +1411,37 @@ case class MethodInference(engine: ReasoningEngine,
               val predName = paramType.datatypeName
               val originalRef = afterPosts.assignment.variables(a._1)._1.toVarTerm(Ref)
               val orgPred = PredInstAccTerm(PredInst(predName, Seq(originalRef)), PermAmount.WRITE)
+
+              // backmapping for eliminating temporary variables in the post conditions
+              val bmH = afterPosts.constructBackMapping(this.currentMethod, useAllVariables = true)
+              val bmI = afterPosts.constructInfoBackMapping()
+              val bm = bmH.followedBy(bmI)
+
               // CHECK IF POTENTIAL EXISTS:
               if (afterPosts.partial.partial.contains(ImplTerm(NotEqCmpTerm(originalRef, NullTerm()), orgPred))) {
-                println("THE ORIGINAL IS IN THE POTENTIAL AND THIS VERY GOOD!")
+                val ensures = ImplTerm(NotEqCmpTerm(originalRef, NullTerm()), orgPred).rewrite(bm)
+                val (pres, posts) = this.methSpec(this.currentMethod.method)
+                this.methSpec.put(this.currentMethod.method, (pres, posts ++ Seq(ensures)))
               }
               else {
                 val variable = VarTerm(a._1, Ref)
                 val pred = PredInstAccTerm(PredInst(predName, Seq(variable)), PermAmount.WRITE)
-                val refolding = afterPosts.findRefoldingStrategy(this.engine, this.defs, pred)
+
+//                val prrr = if(this.currentMethod.method.contains("wand")) pred else orgPred
+                val prrr = orgPred
+
+                val refolding = afterPosts.findRefoldingStrategy(this.engine, this.defs, prrr)
                 // TODO: only do this if it can be shown that the value is non null and add one of the following post conditions:
                 //       x != null ==> Pred(x)
                 //       x != null ==> (Reqs --* Pred(x))
                 refolding match {
                   case Some(value) => {
                     println("THE ORIGINAL PREDICATE CAN BE FOLDED BACK TOGETHER :)")
+                    val injection = findEarliestInjectionPoint(afterPosts)
+                    addRefoldingStrategiesToInjectionPoint(injection, Seq(value))
+                    val ensures = ImplTerm(NotEqCmpTerm(originalRef, NullTerm()), orgPred).rewrite(bm)
+                    val (pres, posts) = this.methSpec(this.currentMethod.method)
+                    this.methSpec.put(this.currentMethod.method, (pres, posts ++ Seq(ensures)))
                   }
                   case None => {
                     println(s"CHECKING IF PACKAGING IS POSSIBLE FOR: ${a._1}   ${a._2}")
@@ -1425,9 +1449,6 @@ case class MethodInference(engine: ReasoningEngine,
                     strategy match {
                       case Some((wand, strat)) => {
                         // TODO: restrict the variables to only allow stuff that is not associated with the variable that is refolded
-                        val bmH = afterPosts.constructBackMapping(this.currentMethod, useAllVariables = true)
-                        val bmI = afterPosts.constructInfoBackMapping()
-                        val bm = bmH.followedBy(bmI)
                         val rewritten = strat.rewrite(bm)
                         val injection = findEarliestInjectionPoint(afterPosts)
                         addRefoldingStrategiesToInjectionPoint(injection, Seq(rewritten))
@@ -1646,6 +1667,7 @@ case class Inference(verifier: Verifier, defs: Map[String, PredDef], reps: Map[S
         Seq(self) ++ internal
       }
       case PackageStep(wand, steps) => {
+        println(s"WAND: ${wand.pretty()}")
         val internal = steps.flatMap(s => convertRefoldingStep(s))
         val proof = Seqn(internal, Seq())()
         val premise = wand.premTerms().reduceLeft((a, b) => AndTerm(a, b)).toExp()

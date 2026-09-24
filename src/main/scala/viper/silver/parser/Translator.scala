@@ -226,7 +226,8 @@ case class Translator(program: PProgram) {
       case p@PVars(_, vars, _) => {
         vars.toSeq.map(v => {
           val value = ttyp(v.typ) match {
-            case _: DatatypeType => {
+            case d: DatatypeType => {
+              instantiateDatatypeTemplate(d)
               Ref
             }
             case e => e
@@ -235,6 +236,7 @@ case class Translator(program: PProgram) {
         })
       }
     }.flatten
+
     Seqn(seqn filterNot (_.isInstanceOf[PSkip]) map stmt, locals)(pos, info)
   }
 
