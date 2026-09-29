@@ -1,8 +1,8 @@
 package viper.silver.inference.v3.knowledge
 
 import viper.silver.ast.{Ref, Type}
-import viper.silver.inference.v3.{FoldingStep, MagicWandManager, PredicateCollector, ReasoningEngine, RefCounter, RefoldingStep, RefoldingStrategy, Sat, TermNormalization, UnSat, UnfoldingStep, ValRef}
-import viper.silver.inference.v3.ast.{AndTerm, BaguetteMagic, BoolTerm, EqCmpTerm, FieldAccTerm, GreaterCmpTerm, Ident, ImplTerm, IntTerm, InternalMethod, LessEqCmpTerm, LogicTerm, MapTermSub, MulTerm, PermFracTerm, PredDef, PredFieldAccTerm, PredInst, PredInstAccTerm, Term, TermRewriter, TermSub, VarTerm}
+import viper.silver.inference.v3.{ApplyStep, FoldingStep, MagicWandManager, PredicateCollector, ReasoningEngine, RefCounter, RefoldingStep, RefoldingStrategy, Sat, TermNormalization, UnSat, UnfoldingStep, ValRef}
+import viper.silver.inference.v3.ast.{AndTerm, BaguetteMagic, BoolTerm, EqCmpTerm, FieldAccTerm, GreaterCmpTerm, Ident, ImplTerm, IntTerm, InternalMethod, LessEqCmpTerm, LogicTerm, MapTermSub, MulTerm, PermAmount, PermFracTerm, PredDef, PredFieldAccTerm, PredInst, PredInstAccTerm, Term, TermRewriter, TermSub, VarTerm}
 
 import scala.collection.mutable
 
@@ -339,7 +339,6 @@ case class KnowledgeBase(path: Seq[(Ident, Term)], assignment: Assignment, heap:
   }
 
 
-
   def findUnfoldingStrategy(engine: ReasoningEngine, defs: Map[String, PredDef], fa: PredFieldAccTerm): Option[RefoldingStrategy] = {
     // TODO: check if it is even possible that the permission amount is reachable
     val directAmount = this.direct.getAmount(fa.exp)
@@ -347,14 +346,39 @@ case class KnowledgeBase(path: Seq[(Ident, Term)], assignment: Assignment, heap:
       Some(RefoldingStrategy(Seq()))
     }
     else {
+      // find relevant folded permissions
       val mapped: Seq[PredInstAccTerm] = this.folded.permissions.map(e => PredInstAccTerm(e._1, e._2))
         .filter(i => !isClearlyZeroPerm(i.perm))
         .filter(i => isNotZeroPerm(engine, i.perm))
         .toSeq
 
+      // find applicable magic wands
+      val applicable = this.mwm.wands.flatMap(w => {
+          val alreadyInDirect = w.directCons.map(_.exp).contains(fa.exp)
+          val unfoldingStrats = w.foldedCons.toSeq.flatMap(f => findUnfoldingStrategyInPredicate(engine, defs, fa, f))
+          if (alreadyInDirect || unfoldingStrats.nonEmpty) {
+            Some((w, Seq(ApplyStep(w, PermAmount.WRITE)) ++ unfoldingStrats))
+          }
+          else {
+            None
+          }
+        })
+        .filter(a => {
+          val w = a._1
+          val allDirects = w.directPrem.forall(p => {
+            isNotZeroPerm(engine, this.direct.getAmount(p.exp))
+          })
+          val allFolded = w.foldedPrem.forall(p => {
+            isNotZeroPerm(engine, this.folded.getAmount(p.pred))
+          })
+          allDirects && allFolded
+        })
+        .flatMap(a => a._2)
+        .toSeq
+
       val strats = mapped.flatMap(v => findUnfoldingStrategyInPredicate(engine, defs, fa, v))
-      if (strats.nonEmpty) {
-        Some(RefoldingStrategy(strats))
+      if (applicable.nonEmpty || strats.nonEmpty) {
+        Some(RefoldingStrategy(applicable ++ strats))
       }
       else {
         None
@@ -591,3 +615,28 @@ case class KnowledgeBase(path: Seq[(Ident, Term)], assignment: Assignment, heap:
 
 
 */
+
+
+/*
+
+get(l: List, idx: Int)
+
+-> Implicitly walking in parallel with list transformed into integer using `length` function
+       l  = Cons(e1, Cons(e2  Cons(e3  r)))
+length(l) = Succ(    Succ(    Succ(    n)))
+
+As long as 0 <= idx < length(l) the successor always exists inside the list
+
+In other words its:
+get(len: Int, i: Int)
+  i == 0 => len = length(l) - idx
+  i > 0 => len > 0
+  i < 0 ==> ERROR unable to compare to nat
+
+
+
+
+
+
+
+ */

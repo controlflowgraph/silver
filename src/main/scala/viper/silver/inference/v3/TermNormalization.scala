@@ -379,7 +379,7 @@ object TermNormalization {
       val (kb5, folCons) = normalizeFoldedRequirements(kb4, f.foldedCons.toSeq)
       val (kb6, parCons) = normalizePotentialRequirements(kb5, f.partialCons.toSeq)
 
-      (kb4, acc._2 ++ Seq(BaguetteMagic(dirPrem.toSet, folPrem.toSet, parPrem.toSet, dirCons.toSet, folCons.toSet, parCons.toSet)))
+      (kb6, acc._2 ++ Seq(BaguetteMagic(dirPrem.toSet, folPrem.toSet, parPrem.toSet, dirCons.toSet, folCons.toSet, parCons.toSet)))
     })
 
   }

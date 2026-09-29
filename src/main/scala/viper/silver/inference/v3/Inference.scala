@@ -384,7 +384,7 @@ case class MethodInference(engine: ReasoningEngine,
           val scaled = PredFieldAccTerm(f.exp, MulTerm(f.perm, perm))
           k.withDirect(k.direct.inhale(scaled))
         })
-        val inFolCons = wand.foldedPrem.foldLeft(inDirCons)((k, f) => {
+        val inFolCons = wand.foldedCons.foldLeft(inDirCons)((k, f) => {
           val scaled = PredInstAccTerm(f.pred, MulTerm(f.perm, perm))
           k.withFolded(k.folded.inhale(scaled))
         })
@@ -526,6 +526,10 @@ case class MethodInference(engine: ReasoningEngine,
       (false, kb)
     }
     else {
+
+//      val relevantWandsDirect = kb.mwm.wands.filter(w => w.directCons.intersect(stillMissingDirect.map(_._1).nonEmpty))
+
+
       val someSuccessWithPotential = stillMissingDirect.map(a => findIfPotHasSolution(ln, kb, a._1, a._2))
         .exists(a => a)
 
@@ -557,7 +561,26 @@ case class MethodInference(engine: ReasoningEngine,
 
   }
 
-  private def computePassedFragment(kb: KnowledgeBase): KnowledgeBase = {
+  private def havocPassedFragment(kb: KnowledgeBase): KnowledgeBase = {
+    val retained = computeRetainedFragment(kb)
+    val heap = Heap(
+      kb.heap.rc,
+      kb.heap.initialized,
+      kb.heap.objMap.keys.foldLeft(Map[ValRef, Obj]())((m, k) => {
+      val updatedFields = kb.heap.objMap(k).fields.foldLeft(Map[String, ValRef]())((r, f) => {
+        if(retained.contains(k) && retained(k).contains(f._1)){
+          r.updated(f._1, f._2)
+        }
+        else {
+          r.updated(f._1, kb.heap.rc.freshValRef())
+        }
+      })
+      m.updated(k, Obj(k, updatedFields))
+    }))
+    kb.withHeap(heap)
+  }
+
+  private def computeRetainedFragment(kb: KnowledgeBase): Map[ValRef, Seq[String]] = {
     val allowedTransitions = kb.heap.objMap.values
       .flatMap(o => {
         val base = o.ref.toVarTerm(Ref)
@@ -584,8 +607,7 @@ case class MethodInference(engine: ReasoningEngine,
 
     println("ALLOWED TRANSITIONS:")
     println(allowedTransitions.map(a => s"${a}").mkString("\n"))
-
-    kb
+    allowedTransitions.groupMap(a => a._1)(a => a._2).map(e => (e._1, e._2.toSeq))
   }
 
   private def processBranchLine(before: KnowledgeBase, bl: BranchLine): (Boolean, KnowledgeBase) = {
@@ -723,6 +745,8 @@ case class MethodInference(engine: ReasoningEngine,
     val ExhaleLine(ln, inj, exp) = line
     clearInjection(inj)
 
+    // TODO: replace with processRequirements
+
     // TODO: check that all requirements are satisfied i.e. that all the field/pred permissions are provided
     //       -> generate and apply refolding strategies
     val rawFolded = PredicateCollector.collectFoldedPredicates(this.engine, exp, before)
@@ -768,9 +792,9 @@ case class MethodInference(engine: ReasoningEngine,
       (a, h, ud, uf, ufac)
     })
 
-    computePassedFragment(resKb)
+    val havoced = havocPassedFragment(resKb)
 
-    (false, resKb)
+    (false, havoced)
   }
 
   private def processLocalAssignLine(before: KnowledgeBase, line: LocalAssignLine): (Boolean, KnowledgeBase) = {
@@ -1343,6 +1367,11 @@ case class MethodInference(engine: ReasoningEngine,
             println(s":::::::::::::::: AFTER ${current.pretty()} :::::::::::::::::")
             println(after.pretty())
 
+//            if(restarting)
+//            {
+//              throw new IllegalArgumentException("STOPPING")
+//            }
+
 
             setKnowledgeBase(current, after)
 
@@ -1674,6 +1703,16 @@ case class Inference(verifier: Verifier, defs: Map[String, PredDef], reps: Map[S
         val consequence = wand.consTerms().reduceLeft((a, b) => AndTerm(a, b)).toExp()
         val magic = MagicWand(premise, consequence)()
         val self = Package(magic, proof)()
+        Seq(self)
+      }
+      // TODO: eliminate perm from the apply step
+      case ApplyStep(wand, perm) => {
+
+        val premise = wand.premTerms().reduceLeft((a, b) => AndTerm(a, b)).toExp()
+        val consequence = wand.consTerms().reduceLeft((a, b) => AndTerm(a, b)).toExp()
+        val magic = MagicWand(premise, consequence)()
+
+        val self = Apply(magic)()
         Seq(self)
       }
       case _ => {
