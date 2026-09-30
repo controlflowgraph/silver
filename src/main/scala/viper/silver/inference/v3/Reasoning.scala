@@ -1,7 +1,7 @@
 package viper.silver.inference.v3
 
 import viper.silver.ast.{Assert, FieldAccessPredicate, InferInfo, Inhale, LocalVarDecl, Method, PredicateAccess, PredicateAccessPredicate, Program, Ref, Seqn, Stmt, Type}
-import viper.silver.inference.v3.ast.{AddTerm, AndTerm, BoolTerm, EqCmpTerm, FieldAccTerm, GreaterCmpTerm, GreaterEqCmpTerm, ImplTerm, IntTerm, LessCmpTerm, LessEqCmpTerm, LogicTerm, MulTerm, NegTerm, NotEqCmpTerm, NotTerm, NullTerm, OrTerm, PermFracTerm, PredFieldAccTerm, PredInstAccTerm, SubTerm, Term, VarTerm}
+import viper.silver.inference.v3.ast.{AddTerm, AndTerm, BaguetteMagic, BoolTerm, EqCmpTerm, FieldAccTerm, GreaterCmpTerm, GreaterEqCmpTerm, ImplTerm, IntTerm, LessCmpTerm, LessEqCmpTerm, LogicTerm, MulTerm, NegTerm, NotEqCmpTerm, NotTerm, NullTerm, OrTerm, PermFracTerm, PredFieldAccTerm, PredInstAccTerm, SubTerm, Term, VarTerm}
 import viper.silver.inference.v3.knowledge.KnowledgeBase
 import viper.silver.verifier.{AbortedExceptionally, AbstractVerificationError, CliOptionError, ConsistencyError, DependencyNotFoundError, ExtensionAbstractVerificationError, Failure, ParseReport, Success, TimeoutOccurred, TypecheckerError, TypecheckerWarning, VerificationError, Verifier, VerifierWarning, errors}
 
@@ -35,6 +35,16 @@ case class ViperReasoningEngine(verifier: Verifier, program: Program) extends Re
 
   private def getVariablesFromTerm(term: Term): Set[VarTerm] = {
     term match {
+      case BaguetteMagic(a, b, c, d, e, f) => {
+        val resA = a.flatMap(t => getVariablesFromTerm(t.exp).union(getVariablesFromTerm(t.perm)))
+        val resB = b.flatMap(t => getVariablesFromTerms(t.pred.args).union(getVariablesFromTerm(t.perm)))
+        val resC = c.flatMap(t => getVariablesFromTerm(t))
+        val resD = d.flatMap(t => getVariablesFromTerm(t.exp).union(getVariablesFromTerm(t.perm)))
+        val resE = e.flatMap(t => getVariablesFromTerms(t.pred.args).union(getVariablesFromTerm(t.perm)))
+        val resF = f.flatMap(t => getVariablesFromTerm(t))
+
+        resA.union(resB).union(resC).union(resD).union(resE).union(resF)
+      }
       case AddTerm(a, b) => getVariablesFromTerms(Seq(a, b))
       case FieldAccTerm(src, field, typ) => getVariablesFromTerm(src)
       case IntTerm(value) => Set()
@@ -199,7 +209,7 @@ case class ViperReasoningEngine(verifier: Verifier, program: Program) extends Re
           case _: errors.AssertFailed => false
           case _ => true
         }
-        if(unexpectedReasoningError) {
+        if(unexpectedReasoningError && false) {
           println(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
           println(proofMethod)
           println("errors during proof verification:")

@@ -64,6 +64,7 @@ object InternalFormTranslator {
       case _: PredicateAccessPredicate => expToLogicTerm(exp)
       case _: Unfolding => expToLogicTerm(exp)
       case _: FullPerm => PermFracTerm(IntTerm(1), IntTerm(1))
+      case Old(exp) => OldTerm(expToTerm(exp))
       case v => throw new IllegalArgumentException(s"Unable to transform ${v.getClass.getCanonicalName} to term!")
     }
   }

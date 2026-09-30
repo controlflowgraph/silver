@@ -146,7 +146,7 @@ case class MethodInference(engine: ReasoningEngine,
       val additional = Seq(
         FoldingStep(pred.pred, pred.perm)
       )
-      val wand = BaguetteMagic(missingDirect.toSet, missingFolded.toSet, missingPartial.toSet, Set(), Set(), Set(ImplTerm(NotEqCmpTerm(variable, NullTerm()), pred)))
+      val wand = BaguetteMagic(missingDirect.toSet, missingFolded.toSet, missingPartial.toSet, Set(), Set(pred), Set())
       val packaging = PackageStep(wand, combined ++ additional)
       println(packaging.pretty())
       println(s"ALLOWING MAGIC WAND: (${merged.map(_.pretty()).mkString(" && ")}) --* (${pred.pretty()})")
@@ -1473,21 +1473,26 @@ case class MethodInference(engine: ReasoningEngine,
                     this.methSpec.put(this.currentMethod.method, (pres, posts ++ Seq(ensures)))
                   }
                   case None => {
-                    println(s"CHECKING IF PACKAGING IS POSSIBLE FOR: ${a._1}   ${a._2}")
-                    val strategy = attemptMagicWandConstruction(afterPosts, originalRef, orgPred)
-                    strategy match {
-                      case Some((wand, strat)) => {
-                        // TODO: restrict the variables to only allow stuff that is not associated with the variable that is refolded
-                        val rewritten = strat.rewrite(bm)
-                        val injection = findEarliestInjectionPoint(afterPosts)
-                        addRefoldingStrategiesToInjectionPoint(injection, Seq(rewritten))
-                        // add the baguette to the post conditions
-                        val ensures = wand.rewrite(bm)
-                        val (pres, posts) = this.methSpec(this.currentMethod.method)
-                        this.methSpec.put(this.currentMethod.method, (pres, posts ++ Seq(ensures)))
-                      }
-                      case None => {
-                        println(s"Unable to package magic wand for ${orgPred}")
+                    val requirement = NotEqCmpTerm(originalRef, NullTerm())
+                    val isNotNull = this.engine.provePure(afterPosts, requirement)
+                    if(isNotNull == Sat)
+                    {
+                      println(s"CHECKING IF PACKAGING IS POSSIBLE FOR: ${a._1}   ${a._2}")
+                      val strategy = attemptMagicWandConstruction(afterPosts, originalRef, orgPred)
+                      strategy match {
+                        case Some((wand, strat)) => {
+                          // TODO: restrict the variables to only allow stuff that is not associated with the variable that is refolded
+                          val rewritten = strat.rewrite(bm)
+                          val injection = findEarliestInjectionPoint(afterPosts)
+                          addRefoldingStrategiesToInjectionPoint(injection, Seq(rewritten))
+                          // add the baguette to the post conditions
+                          val ensures = ImplTerm(requirement.substitute(bm).asInstanceOf[LogicTerm], wand.rewrite(bm))
+                          val (pres, posts) = this.methSpec(this.currentMethod.method)
+                          this.methSpec.put(this.currentMethod.method, (pres, posts ++ Seq(ensures)))
+                        }
+                        case None => {
+                          println(s"Unable to package magic wand for ${orgPred}")
+                        }
                       }
                     }
                   }

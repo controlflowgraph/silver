@@ -135,7 +135,7 @@ object ParameterSubstitutor {
           case PAsserting(asserting, a, in, exp) => ???
           case PInhaleExhaleExp(l, in, c, ex, r) => ???
           case PCurPerm(op, res) => ???
-          case POldExp(op, label, e) => ???
+          case v@POldExp(op, label, e) => POldExp(op, label, e.update(processParametersExp(e.inner, ts)))(v.pos)
           case PDebugLabelledOldExp(op, label, e) => ???
         }
         //        case PLookup(base, l, idx, r) => ???

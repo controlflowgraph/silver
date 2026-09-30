@@ -213,12 +213,21 @@ class FastParser {
 
     val file = f.toAbsolutePath().normalize()
     val data = ParserData(plugins, loader, mutable.HashSet(file))
-    val program = RecParser(file, data, false).parses(s)
-    if (expandMacros) {
-      MacroExpander.expandDefines(program)
-    } else  {
-      program
+    try{
+
+      val program = RecParser(file, data, false).parses(s)
+      if (expandMacros) {
+        MacroExpander.expandDefines(program)
+      } else  {
+        program
+      }
     }
+    catch{
+      case e => println(e)
+        e.printStackTrace()
+        throw new IllegalArgumentException()
+    }
+
   }
 
   case class ParserData(plugins: Option[SilverPluginManager], loader: FileLoader, local: mutable.HashSet[Path], std: mutable.HashSet[Path] = mutable.HashSet.empty)

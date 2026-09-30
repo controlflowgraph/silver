@@ -1,7 +1,7 @@
 package viper.silver.inference.v3.ast
 
 import org.apache.commons.io.filefilter.PrefixFileFilter
-import viper.silver.ast.{Add, And, BoolLit, CondExp, CurrentPerm, EqCmp, Exp, Field, FieldAccess, FieldAccessPredicate, FractionalPerm, GeCmp, GtCmp, Implies, IntLit, IntPermMul, LeCmp, LocalVar, LtCmp, MagicWand, Minus, Mul, NeCmp, Not, NullLit, Or, PermAdd, PermMinus, PermMul, PredicateAccess, PredicateAccessPredicate, Ref, Sub, Type}
+import viper.silver.ast.{Add, And, BoolLit, CondExp, CurrentPerm, EqCmp, Exp, Field, FieldAccess, FieldAccessPredicate, FractionalPerm, GeCmp, GtCmp, Implies, IntLit, IntPermMul, LeCmp, LocalVar, LtCmp, MagicWand, Minus, Mul, NeCmp, Not, NullLit, Old, Or, PermAdd, PermMinus, PermMul, PredicateAccess, PredicateAccessPredicate, Ref, Sub, Type}
 import viper.silver.inference.v3.FixedPoint
 import viper.silver.inference.v3.knowledge.KnowledgeBase
 
@@ -56,6 +56,22 @@ trait Term {
   def pretty(): String
 
   def toExp(): Exp
+}
+
+case class OldTerm(e: Term) extends Term {
+  def substitute(ts: TermSub): Term = {
+    ts.apply(OldTerm(
+      this.e.substitute(ts)
+    ))
+  }
+
+  def pretty(): String = {
+    s"old(${this.e.pretty()})"
+  }
+
+  override def toExp(): Exp = {
+    Old(this.e.toExp())()
+  }
 }
 
 case class CondTerm(cond: LogicTerm, left: Term, right: Term) extends Term {
