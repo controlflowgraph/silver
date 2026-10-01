@@ -60,14 +60,8 @@ case class MethodInference(engine: ReasoningEngine,
     val predDef = this.defs(pred.pred.name)
     val body = predDef.instantiate(pred.pred)
     // locate the stuff that is not satisfied yet
-    // TODO: extend the refolding strategy to include
-    //              package: sub parts are the steps required to package this magic wand
-    //              apply: single argument which contains a magic wand
-    //           maybe use the verifier to get information about the parts that are not satisfied yet?
-    //           maybe just check from the current scope and call "findRefoldingStrategy" + checking the pure info (or leave that out and say its a heuristic?!)
 
-
-    // TODO: maybe extend with potential and pure parts
+    // TODO: maybe extend with pure parts
     val rawFolded = PredicateCollector.collectFoldedPredicates(this.engine, body, kb)
     val rawDirect = PredicateCollector.collectDirectPredicates(this.engine, body, kb)
     //    val rawStripped = PredicateCollector.stripToPure(this.engine, body, kb)
@@ -106,37 +100,6 @@ case class MethodInference(engine: ReasoningEngine,
     println("%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%")
 
     val notAllContentMissing = folded.size != missingFolded.size || direct.size != missingDirect.size || partial.size != missingPartial.size
-
-    /*
-      TODO: add injection point at the last position in if branches to allow different injections to take place on different paths
-          e.g.
-          if(x == null)
-          {
-            ....
-            injection 1
-          }
-          else
-          {
-            ....
-            if(something)
-            {
-              injection 2
-            }
-            else
-            {
-              injection 3
-            }
-            injection 4 -> only chose this when there is something other than a merge line before this path
-          }
-
-          when reconstructing the magic wand choose the injection corresponding to the path that it has come from (hope that its localized enough :) )
-    */
-
-    /*
-      which magic wand is better? (equivalent?)
-      x != null ==> ((q != null ==> Q(q)) --* X(x))
-      (q != null ==> Q(q)) --* (x != null ==> X(x))
-    */
 
     if (notAllContentMissing) {
       val merged = missingDirect ++ missingFolded ++ missingPartial
@@ -261,26 +224,26 @@ case class MethodInference(engine: ReasoningEngine,
             .extendInfo(EqCmpTerm(res, conditioned))
         })
 
-        println("EXTENDED WITH DIRECT STUFF:")
-        println(extendedWithFolded.pretty())
+//        println("EXTENDED WITH DIRECT STUFF:")
+//        println(extendedWithFolded.pretty())
 
         // applying the steps of the packaging procedure
         val afterSteps = steps.foldLeft(extendedWithFolded)((k, s) => applyRefoldingStep(engine, k, s))
-        println("AFTER STEPS:")
-        println(afterSteps.pretty())
+//        println("AFTER STEPS:")
+//        println(afterSteps.pretty())
 
         // exhaling the permissions which are the consequence of the magic wand
         val exhaledDirect = wand.directCons.foldLeft(afterSteps)((k, d) => k.withDirect(k.direct.exhale(d)))
         val exhaledFolded = wand.foldedCons.foldLeft(exhaledDirect)((k, d) => k.withFolded(k.folded.exhale(d)))
 
-        println("AFTER EXHALING RESULT:")
-        println(exhaledFolded.pretty())
+//        println("AFTER EXHALING RESULT:")
+//        println(exhaledFolded.pretty())
 
         // adding the magic wand to the current context
         val inhalingWand = exhaledFolded.withMWM(exhaledFolded.mwm.addWand(wand))
 
-        println("AFTER INHALING WAND:")
-        println(inhalingWand.pretty())
+//        println("AFTER INHALING WAND:")
+//        println(inhalingWand.pretty())
 
         // reconstruction of remaining permissions after performing the folding operations
         val dirKeys = wand.directPrem.map(d => d.exp)
@@ -323,7 +286,7 @@ case class MethodInference(engine: ReasoningEngine,
           // compute the adjusted amount using the given hypothetical formula
           val adjusted = SubTerm(provided, conditioned)
 
-          println(s"SIMP ADJUSTED   ${d.pretty()}: ${TermRewriter.simplify(adjusted).pretty()}")
+//          println(s"SIMP ADJUSTED   ${d.pretty()}: ${TermRewriter.simplify(adjusted).pretty()}")
 
           k.withDirect(DirectPermissionMask(k.direct.permissions.updated(d, adjusted)))
         })
@@ -356,18 +319,18 @@ case class MethodInference(engine: ReasoningEngine,
           // compute the adjusted amount using the given hypothetical formula
           val adjusted = SubTerm(provided, conditioned)
 
-          println(s"SIMP ADJUSTED   ${d.pretty()}: ${TermRewriter.simplify(adjusted).pretty()}")
+//          println(s"SIMP ADJUSTED   ${d.pretty()}: ${TermRewriter.simplify(adjusted).pretty()}")
 
           k.withFolded(FoldedPermissionMask(k.folded.permissions.updated(d, adjusted)))
         })
 
-        println("AFTER ADJUSTING REMAINING PERMISSIONS:")
-        println(adjustedFolded.pretty())
+//        println("AFTER ADJUSTING REMAINING PERMISSIONS:")
+//        println(adjustedFolded.pretty())
 
         adjustedFolded
       }
       case ApplyStep(wand, perm) => {
-        println(s"APPLYING MW: ${wand.pretty()}")
+//        println(s"APPLYING MW: ${wand.pretty()}")
         // exhale the premise of the magic wand
         val exDirPrem = wand.directPrem.foldLeft(base)((k, d) => {
           val scaled = PredFieldAccTerm(d.exp, MulTerm(d.perm, perm))
@@ -391,8 +354,8 @@ case class MethodInference(engine: ReasoningEngine,
         // remove the magic wand from the
         val remWand = inFolCons.withMWM(inFolCons.mwm.removeWand(wand))
 
-        println("AFTER APPLYING MW:")
-        println(remWand.pretty())
+//        println("AFTER APPLYING MW:")
+//        println(remWand.pretty())
 
         remWand
       }
@@ -604,13 +567,21 @@ case class MethodInference(engine: ReasoningEngine,
           .map(f => (o.ref, f._1))
       })
 
-    println("ALLOWED TRANSITIONS:")
-    println(allowedTransitions.map(a => s"${a}").mkString("\n"))
+//    println("ALLOWED TRANSITIONS:")
+//    println(allowedTransitions.map(a => s"${a}").mkString("\n"))
     allowedTransitions.groupMap(a => a._1)(a => a._2).map(e => (e._1, e._2.toSeq))
   }
 
   private def processBranchLine(before: KnowledgeBase, bl: BranchLine): (Boolean, KnowledgeBase) = {
-    (false, before)
+    val BranchLine(ln, pre, cond, thn, els) = bl
+    // collecting the fields that are accessed within this
+    val rawAccessPermissions = collectRequiredFieldPermissions(cond)
+    val (normFields, accessPermissions) = TermNormalization.normalizeDirectRequirements(before, rawAccessPermissions.toSeq)
+
+    val res = processRequirements(ln, pre, normFields, accessPermissions.toSet, Set())
+    println("AFTER BRANCH LINE: ")
+    println(res._2.pretty())
+    res
   }
 
   private def processMergeLine(before: KnowledgeBase, ml: MergeLine): (Boolean, KnowledgeBase) = {
@@ -715,7 +686,7 @@ case class MethodInference(engine: ReasoningEngine,
     val (shouldRestart, afterExhales) = extendedPres.reverse.foldLeft((false, before))((acc, p) => {
       val (r, kb) = acc
       val strats = getRefoldingStrategiesAtInjectionPoint(inj)
-      val (restart, result) = processLine(kb, ExhaleLine(ln, inj, p))
+      val (restart, result) = processExhaleLine(kb, ExhaleLine(ln, inj, p))
       val after = getRefoldingStrategiesAtInjectionPoint(inj)
       clearInjection(inj)
       addRefoldingStrategiesToInjectionPoint(inj, strats ++ after)
@@ -787,7 +758,7 @@ case class MethodInference(engine: ReasoningEngine,
     })
 
     val afterPartialRemoval = afterPartial.withPartial(afterPartial.partial.exhale(partial))
-    println(s"REMOVING PARTIAL: ${partial.map(_.pretty()).mkString(" & ")}")
+
     val afterBaguetteRemoval = afterPartialRemoval.withMWM(baguettes.foldLeft(afterPartialRemoval.mwm)((a, b) => a.removeWand(b)))
 
     // TODO: detect that the predicate permissions are not fulfilled
@@ -972,10 +943,10 @@ case class MethodInference(engine: ReasoningEngine,
     val unsat = resKb.partial.partial.filter(p => this.engine.provePureWithPotential(resKb, p.prem).equals(UnSat))
     val potsat = resKb.partial.partial.filter(p => this.engine.provePureWithPotential(resKb, p.prem).equals(PotSat))
 
-    println("CLEANING PROGRAM:")
-    println(s"SAT: ${sat.map(_.pretty())}")
-    println(s"UNSAT: ${unsat.map(_.pretty())}")
-    println(s"POTSAT: ${potsat.map(_.pretty())}")
+//    println("CLEANING PROGRAM:")
+//    println(s"SAT: ${sat.map(_.pretty())}")
+//    println(s"UNSAT: ${unsat.map(_.pretty())}")
+//    println(s"POTSAT: ${potsat.map(_.pretty())}")
 
     if (sat.isEmpty && unsat.isEmpty) {
       resKb
@@ -1031,10 +1002,6 @@ case class MethodInference(engine: ReasoningEngine,
     }
   }
 
-  // TODO: THIS DOES NOT WORK WITH THE CONTINUATION THAT PROVIDES A TERM INSTEAD OF A COMPARISON
-  //       -> THINK ABOUT HOW TO SOLVE IT
-  //           -> maybe use a second entry in the line propagator that converts a value of generic T to LogicTerm
-  //           -> and ContinueAdjustment has also this generic parameter?
   private def propagatePureConstraintThrough[P](ident: Ident, until: Ident, lp: LinePropagator[P], payload: P): AdjustmentResponse[P] = {
     if (ident.equals(this.currentMethod.start)) {
       val currentSpec = this.methSpec.getOrElse(this.currentMethod.method, (Seq(), Seq()))
@@ -1320,6 +1287,7 @@ case class MethodInference(engine: ReasoningEngine,
 
     var restarting = true
     while (restarting) {
+      this.knowledge.clear()
       restarting = false
 
       // generate an initial assignment based of the arguments of the method
@@ -1347,12 +1315,18 @@ case class MethodInference(engine: ReasoningEngine,
                   if (thn == current) {
                     val assumption = cond
                     this.knowledge(i).values
-                      .map(k => k.withPath(thn, assumption).withInfo(assumption))
+                      .map(k => {
+                        val (norm, t) = TermNormalization.normalizeMutablePartsInLogicTerm(k, k, assumption)
+                        norm.withPath(thn, assumption).extendInfo(t)
+                      })
                   }
                   else {
                     val assumption = NotTerm(cond)
                     this.knowledge(i).values
-                      .map(k => k.withPath(els, assumption).withInfo(assumption))
+                      .map(k => {
+                        val (norm, t) = TermNormalization.normalizeMutablePartsInLogicTerm(k, k, assumption)
+                        norm.withPath(els, assumption).extendInfo(t)
+                      })
                   }
                 }
                 case _ => this.knowledge(i).values
@@ -1378,38 +1352,7 @@ case class MethodInference(engine: ReasoningEngine,
             println(s":::::::::::::::: AFTER ${current.pretty()} :::::::::::::::::")
             println(after.pretty())
 
-            //            if(restarting)
-            //            {
-            //              throw new IllegalArgumentException("STOPPING")
-            //            }
-
-
             setKnowledgeBase(current, after)
-
-            if (false) {
-              val rc = RefCounter(Counter(0))
-              val kb0 = new KnowledgeBase(after.fieldTypes, rc)
-              val rawPart = PredInstAccTerm(PredInst("Part", Seq(VarTerm("x", Ref))), PermAmount.WRITE)
-              val (kb1, parts) = TermNormalization.normalizeFoldedRequirements(kb0, Seq(rawPart))
-              val missing = PredInstAccTerm(PredInst("Missing", Seq(VarTerm("x", Ref))), PermAmount.WRITE)
-              val dummy = kb1
-                .update((a, h, d, f, i, p) => (a, h, d, f.inhale(parts.head), i, p))
-              val desired = PredInstAccTerm(PredInst("Wand", Seq(VarTerm("x", Ref))), PermAmount.WRITE)
-              attemptMagicWandConstruction(dummy, VarTerm("x", Ref), desired)
-            }
-
-            //            if (restarting) {
-            //              // TODO: fix the restarting logic
-            //              //              println("KB WHEN RESTARTING:")
-            //              //              println(after.pretty())
-            //              dumpBeautifiedKbs()
-            //              println("INJECTIONS WHEN RESTARTING:")
-            //              this.injections.foreach(e => {
-            //                println(e._1)
-            //                e._2.foreach(s => println(s.pretty().indent(2)))
-            //              })
-            //              throw new IllegalArgumentException(s"RESTARTING :/ ${line.pretty()}")
-            //            }
           }
         })
 
@@ -1422,12 +1365,9 @@ case class MethodInference(engine: ReasoningEngine,
         if (startKbs.size != 1) {
           throw new IllegalArgumentException("Expected a single knowledge base at the start of the method!")
         }
+
         val startKb = startKbs.head
-
         val finalKbs = this.knowledge(meth.stop).values
-
-        // TODO: the refolding strategies must match
-        // TODO: the injections must be cleared per path/across all paths
         val mergedPosts = (meth.posts ++ this.methSpec(this.currentMethod.method)._2).reverse
 
         val afterPostsKbs = finalKbs.map(finalKb => {
@@ -1441,83 +1381,145 @@ case class MethodInference(engine: ReasoningEngine,
           afterPosts
         })
 
-        afterPostsKbs.foreach(afterPosts => {
-          val originalTypes = program.inferInfo.typeAnnotations(this.currentMethod.method)._1
-          val argumentNames = this.currentMethod.args.map(a => a._1)
-          println(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
-          println(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
-          println(afterPosts.pretty())
-          argumentNames.zip(originalTypes)
-            .filter(a => a._2.isInstanceOf[DatatypeType])
-            .foreach(a => {
-              // TODO: check if there exists a refolding strategy for a specific entry
-              val paramType = a._2.asInstanceOf[DatatypeType]
-              // TODO: fix the name mangling to actually cover the generic name mangling stuff
-              val predName = paramType.datatypeName
-              val originalRef = afterPosts.assignment.variables(a._1)._1.toVarTerm(Ref)
-              val orgPred = PredInstAccTerm(PredInst(predName, Seq(originalRef)), PermAmount.WRITE)
+        val nullGuardedReconstruction = (kb: KnowledgeBase, v: VarTerm, pred: PredInstAccTerm) => {
+          // check if v != null ==> pred(v) can be reconstructed
 
-              // backmapping for eliminating temporary variables in the post conditions
-              val bmH = afterPosts.constructBackMapping(this.currentMethod, useAllVariables = true)
-              val bmI = afterPosts.constructInfoBackMapping()
-              val bm = bmH.followedBy(bmI)
+          // backmapping for eliminating temporary variables in the post conditions
+          val bmH = kb.constructBackMapping(this.currentMethod, useAllVariables = true)
+          val bmI = kb.constructInfoBackMapping()
+          val bm = bmH.followedBy(bmI)
 
-              // CHECK IF POTENTIAL EXISTS:
-              if (afterPosts.partial.partial.contains(ImplTerm(NotEqCmpTerm(originalRef, NullTerm()), orgPred))) {
-                val ensures = ImplTerm(NotEqCmpTerm(originalRef, NullTerm()), orgPred).rewrite(bm)
-                val (pres, posts) = this.methSpec(this.currentMethod.method)
-                this.methSpec.put(this.currentMethod.method, (pres, posts ++ Seq(ensures)))
-              }
-              else {
-                val variable = VarTerm(a._1, Ref)
-                val pred = PredInstAccTerm(PredInst(predName, Seq(variable)), PermAmount.WRITE)
+          val premise = NotEqCmpTerm(v, NullTerm())
+          val impl = ImplTerm(premise, pred)
+          val implicationAvailable = kb.partial.partial.contains(impl)
+          if (implicationAvailable) {
+            println(s"ITS AVAILABLE IN THE IMPLICATIONS ${impl.pretty()}")
+            // implication is available in the partial information
+            // no need to do anything
+            Some((kb, RefoldingStrategy(Seq()), Some(impl.rewrite(bm))))
+          }
+          else {
+            val variableMustBeNonNull = this.engine.provePure(kb, premise) == Sat
+            if (variableMustBeNonNull) {
+              println(s"SEARCHING REFOLDING STRATEGY ${impl.pretty()}")
+              kb.findRefoldingStrategy(this.engine, this.defs, pred)
+                .map(s => {
+                  println(s"FOUND STRATEGY ${impl.pretty()}")
+                  println(s.pretty())
+                  (kb, s, Some(impl.rewrite(bm)))
+                })
+            }
+            else {
+              println(s"ITS VARIABLE IS NULL ${impl.pretty()}")
+              Some((kb, RefoldingStrategy(Seq()), Some(impl.rewrite(bm))))
+            }
+          }
+        }
 
-                //                val prrr = if(this.currentMethod.method.contains("wand")) pred else orgPred
-                val prrr = orgPred
+        val nullGuardedMagicWandReconstruction = (kb: KnowledgeBase, v: VarTerm, pred: PredInstAccTerm) => {
+          // backmapping for eliminating temporary variables in the post conditions
+          val bmH = kb.constructBackMapping(this.currentMethod, useAllVariables = true)
+          val bmI = kb.constructInfoBackMapping()
+          val bm = bmH.followedBy(bmI)
 
-                val refolding = afterPosts.findRefoldingStrategy(this.engine, this.defs, prrr)
-                // TODO: only do this if it can be shown that the value is non null and add one of the following post conditions:
-                //       x != null ==> Pred(x)
-                //       x != null ==> (Reqs --* Pred(x))
-                refolding match {
+          val premise = NotEqCmpTerm(v, NullTerm())
+          val variableMustBeNonNull = this.engine.provePure(kb, premise) == Sat
+          if (variableMustBeNonNull) {
+            attemptMagicWandConstruction(kb, v, pred)
+              .map(s => (kb, s._2, Some(ImplTerm(premise, s._1).rewrite(bm))))
+          }
+          else {
+            Some((kb, RefoldingStrategy(Seq()), None))
+          }
+        }
+
+        val reconstructionMethods: Seq[(KnowledgeBase, VarTerm, PredInstAccTerm) => Option[(KnowledgeBase, RefoldingStrategy, Option[LogicTerm])]] = Seq(
+          nullGuardedReconstruction,
+          nullGuardedMagicWandReconstruction
+        )
+
+        val originalTypes = program.inferInfo.typeAnnotations(this.currentMethod.method)._1
+        val argumentNames = this.currentMethod.args.map(a => a._1)
+        argumentNames.zip(originalTypes)
+          .filter(a => a._2.isInstanceOf[DatatypeType])
+          .foldLeft((afterPostsKbs, Seq[(String, Type)]()))((acc, arg) => {
+
+            val paramType = arg._2.asInstanceOf[DatatypeType]
+            // TODO: fix the name mangling to actually cover the generic name mangling stuff
+            val predName = paramType.datatypeName
+
+            val successfullyReconstructed = reconstructionMethods.foldLeft((false, acc._1))((state, rec) => {
+              val successfulReconstruction = true
+              val failedReconstruction = false
+
+              val (alreadySuccessful, kbs) = state
+
+              if (!alreadySuccessful) {
+                val specTerms = kbs.map(kb => {
+                  val originalRef = kb.assignment.variables(arg._1)._1.toVarTerm(Ref)
+                  val orgPred = PredInstAccTerm(PredInst(predName, Seq(originalRef)), PermAmount.WRITE)
+
+                  rec(kb, originalRef, orgPred)
+                })
+
+                // merge all options into a single option
+                val merged = specTerms.foldLeft[Option[Seq[(KnowledgeBase, RefoldingStrategy, Option[LogicTerm])]]](Some(Seq()))((a, b) => (a, b) match {
+                  case (Some(l), Some(v)) => Some(l ++ Seq(v))
+                  case _ => None
+                })
+
+                merged match {
                   case Some(value) => {
-                    println("THE ORIGINAL PREDICATE CAN BE FOLDED BACK TOGETHER :)")
-                    val injection = findEarliestInjectionPoint(afterPosts)
-                    addRefoldingStrategiesToInjectionPoint(injection, Seq(value))
-                    val ensures = ImplTerm(NotEqCmpTerm(originalRef, NullTerm()), orgPred).rewrite(bm)
-                    val (pres, posts) = this.methSpec(this.currentMethod.method)
-                    this.methSpec.put(this.currentMethod.method, (pres, posts ++ Seq(ensures)))
-                  }
-                  case None => {
-                    val requirement = NotEqCmpTerm(originalRef, NullTerm())
-                    val isNotNull = this.engine.provePure(afterPosts, requirement)
-                    if (isNotNull == Sat) {
-                      println(s"CHECKING IF PACKAGING IS POSSIBLE FOR: ${a._1}   ${a._2}")
-                      val strategy = attemptMagicWandConstruction(afterPosts, originalRef, orgPred)
-                      strategy match {
-                        case Some((wand, strat)) => {
-                          // TODO: restrict the variables to only allow stuff that is not associated with the variable that is refolded
-                          val rewritten = strat.rewrite(bm)
-                          val injection = findEarliestInjectionPoint(afterPosts)
-                          addRefoldingStrategiesToInjectionPoint(injection, Seq(rewritten))
-                          // add the baguette to the post conditions
-                          val ensures = ImplTerm(requirement.substitute(bm).asInstanceOf[LogicTerm], wand.rewrite(bm))
-                          val (pres, posts) = this.methSpec(this.currentMethod.method)
-                          this.methSpec.put(this.currentMethod.method, (pres, posts ++ Seq(ensures)))
-                        }
-                        case None => {
-                          println(s"Unable to package magic wand for ${orgPred}")
-                        }
-                      }
+                    // adjust the method specification (assumes at least one path exists)
+                    val terms = value.flatMap(t => t._3)
+                    println(s"BAGUETTE TERMS: ${terms.map(_.pretty())}")
+                    if (terms.nonEmpty && terms.forall(t => t.equals(terms.head))) {
+                      val (pres, posts) = this.methSpec(this.currentMethod.method)
+                      this.methSpec.put(this.currentMethod.method, (pres, posts ++ Seq(terms.head)))
+
+                      // apply the refolding strategies
+                      val adjusted = value.map(t => {
+                        val (kb, strat, _) = t
+                        val injection = findEarliestInjectionPoint(kb)
+                        applyStrategies(this.engine, injection, kb, Seq(strat))
+                      })
+
+                      (successfulReconstruction, adjusted)
+                    }
+                    else {
+                      (failedReconstruction, kbs)
                     }
                   }
+                  case None => (failedReconstruction, kbs)
                 }
               }
+              else {
+                (failedReconstruction, kbs)
+              }
             })
-          //        this.knowledge.put(meth.stop, afterPosts)
-          // TODO: extend the post conditions with the information that are left over
-        })
 
+            if (successfullyReconstructed._1) {
+              (successfullyReconstructed._2, acc._2)
+            }
+            else {
+              val mappedReconstructions = acc._1.filter(isBaseCasePath)
+                .map(kb => {
+                  val originalRef = kb.assignment.variables(arg._1)._1.toVarTerm(Ref)
+                  val orgPred = PredInstAccTerm(PredInst(predName, Seq(originalRef)), PermAmount.WRITE)
+                  val result = nullGuardedMagicWandReconstruction(kb, originalRef, orgPred)
+                  (kb.path, result)
+                })
+
+              println("MAPPED RECONSTRUCTIONS:")
+              mappedReconstructions.foreach(a => {
+                println(a._1.map(a => a._2.pretty()).mkString(" -> "))
+                println(a._2.flatMap(_._3.map(a => a.pretty())))
+              })
+              acc
+            }
+          })
+
+        // TODO: add a final test which checks if the inferred method spec can be verified
       }
 
       if (true) {
@@ -1529,6 +1531,49 @@ case class MethodInference(engine: ReasoningEngine,
         //        dumpRawKbs()
       }
     }
+  }
+
+  private def isBaseCasePath(kb: KnowledgeBase): Boolean = {
+    println(s"lines on path: ${kb.path.map(a => a._1.pretty() + "  " + a._2.pretty()).mkString(" -> ")}")
+    computeLinesOnPathFromEnd(kb).foreach(println)
+
+    !computeLinesOnPathFromEnd(kb).exists {
+      case CallLine(_, _, name, _, _) => name.equals(this.currentMethod.method)
+      case _ => false
+    }
+  }
+
+  private def computeLinesOnPathFromEnd(kb: KnowledgeBase): Seq[Line] = {
+    computeLinesOnPathFromIdent(kb, this.currentMethod.stop)
+  }
+
+  private def computeLinesOnPathFromIdent(kb: KnowledgeBase, current: Ident): Seq[Line] = {
+    if(current == this.currentMethod.start){
+      Seq()
+    }
+    else{
+      val mesh = this.currentMethod.rep.mesh
+      val lines = this.currentMethod.rep.lines
+      val currentLine = lines(current)
+      val sub = currentLine match {
+        case MergeLine(ln, correspondingBranch, postThnInj, postElsInj, lastThn, lastEls) => {
+          val correspBranch = lines(correspondingBranch).asInstanceOf[BranchLine]
+          if(kb.path.exists(n => n._1.equals(correspBranch.thn))){
+            computeLinesOnPathFromIdent(kb, lastThn)
+          }
+          else {
+            computeLinesOnPathFromIdent(kb, lastEls)
+          }
+        }
+        case l => {
+          computeLinesOnPathFromIdent(kb, mesh.filter(e => e._2.contains(l.ln))
+            .head._1)
+        }
+      }
+      sub ++ Seq(currentLine)
+    }
+
+
   }
 
   private def applyBm(bm: TermSub, term: Term): Term = {
@@ -1616,8 +1661,8 @@ case class MethodInference(engine: ReasoningEngine,
           kb.folded.permissions.foreach(p => {
             println(s"  ${PredInst(p._1.name, p._1.args.map(a => applyBm(bm, a))).pretty()}: ${TermRewriter.simplify(applyBm(bm, p._2)).pretty()}")
           })
-          println("----------- untangled -------------")
-          LogicTermRewriting.untangle(kb)
+//          println("----------- untangled -------------")
+//          LogicTermRewriting.untangle(kb)
         })
       })
     println(":::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::")
@@ -1666,9 +1711,9 @@ case class MethodInference(engine: ReasoningEngine,
     // applying the back mapping like this assumes that the contents of the parameter arguments can not be altered
     val backmapping = kb.constructBackMapping(meth, useAllVariables = false)
     val initialBackmapping = kb.constructInitialBackMapping(meth, useAllVariables = false)
-    println("CHECKING THE STATE AFTER:")
-    println(s"IBM: ${initialBackmapping}")
-    println(s"BM: ${backmapping}")
+//    println("CHECKING THE STATE AFTER:")
+//    println(s"IBM: ${initialBackmapping}")
+//    println(s"BM: ${backmapping}")
     kb.heap.objMap.foreach(e => {
       on1(engine, kb, e._1, initialBackmapping, backmapping)
     })
@@ -1824,7 +1869,7 @@ case class Inference(verifier: Verifier, defs: Map[String, PredDef], reps: Map[S
           injections
         )
         val beforeSpec = this.methSpec(f)
-        mi.infer(this.program, this.reps(f), true)
+        mi.infer(this.program, this.reps(f), inductionStart = true)
         println("::::::::::::::::::::: ADD. SPEC. BEFORE INFERENCE :::::::::::::::::")
         printSpec(beforeSpec)
         println("::::::::::::::::::::: ADD. SPEC. AFTER INFERENCE :::::::::::::::::")

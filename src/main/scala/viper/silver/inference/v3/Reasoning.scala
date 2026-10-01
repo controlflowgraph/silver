@@ -283,6 +283,7 @@ case class ViperReasoningEngine(verifier: Verifier, program: Program) extends Re
           println(">>>>>>>>>>>>> PURE >>>>>>>>>>>>>>>>>>>>")
           println(proofMethod)
           println(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
+          throw new IllegalStateException("WHAT")
         }
         UnSat
       }

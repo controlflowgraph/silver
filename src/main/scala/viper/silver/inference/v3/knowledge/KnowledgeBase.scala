@@ -125,9 +125,6 @@ case class KnowledgeBase(path: Seq[(Ident, Term)], assignment: Assignment, heap:
       open = open.diff(Set(current))
     }
 
-    println("backmapping start :::::")
-    mapping.foreach(e => println(s"${e._1.pretty()} ==> ${e._2.pretty()}"))
-    println("backmapping end :::::")
     MapTermSub(mapping.toMap)
   }
 
@@ -259,10 +256,7 @@ case class KnowledgeBase(path: Seq[(Ident, Term)], assignment: Assignment, heap:
 
   private def isNotZeroPerm(engine: ReasoningEngine, term: Term): Boolean = {
     val zero = PermFracTerm(IntTerm(BigInt.int2bigInt(0)), IntTerm(BigInt.int2bigInt(1)))
-    val res = engine.provePure(this, GreaterCmpTerm(term, zero)) == Sat
-    println(s"checking if: ${term.pretty()} > ${zero.pretty()}")
-    //    engine.prove(this, EqCmpTerm(term, zero)) != UnSat
-    res
+    engine.provePure(this, GreaterCmpTerm(term, zero)) == Sat
   }
 
   private def isClearlyZeroPerm(t: Term): Boolean = {
@@ -376,7 +370,12 @@ case class KnowledgeBase(path: Seq[(Ident, Term)], assignment: Assignment, heap:
         .flatMap(a => a._2)
         .toSeq
 
-      val strats = mapped.flatMap(v => findUnfoldingStrategyInPredicate(engine, defs, fa, v))
+      val strats = mapped.flatMap(v => {
+        println(s"FINDING UNFOLDING STRATEGY FOR ${fa.pretty()} IN ${v.pretty()}")
+        val res = findUnfoldingStrategyInPredicate(engine, defs, fa, v)
+        println(res)
+        res
+      })
       if (applicable.nonEmpty || strats.nonEmpty) {
         Some(RefoldingStrategy(applicable ++ strats))
       }
