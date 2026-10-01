@@ -152,8 +152,7 @@ case class MethodInference(engine: ReasoningEngine,
       println(s"ALLOWING MAGIC WAND: (${merged.map(_.pretty()).mkString(" && ")}) --* (${pred.pretty()})")
       Some((wand, RefoldingStrategy(Seq(packaging))))
     }
-    else
-    {
+    else {
       None
     }
   }
@@ -527,7 +526,7 @@ case class MethodInference(engine: ReasoningEngine,
     }
     else {
 
-//      val relevantWandsDirect = kb.mwm.wands.filter(w => w.directCons.intersect(stillMissingDirect.map(_._1).nonEmpty))
+      //      val relevantWandsDirect = kb.mwm.wands.filter(w => w.directCons.intersect(stillMissingDirect.map(_._1).nonEmpty))
 
 
       val someSuccessWithPotential = stillMissingDirect.map(a => findIfPotHasSolution(ln, kb, a._1, a._2))
@@ -567,16 +566,16 @@ case class MethodInference(engine: ReasoningEngine,
       kb.heap.rc,
       kb.heap.initialized,
       kb.heap.objMap.keys.foldLeft(Map[ValRef, Obj]())((m, k) => {
-      val updatedFields = kb.heap.objMap(k).fields.foldLeft(Map[String, ValRef]())((r, f) => {
-        if(retained.contains(k) && retained(k).contains(f._1)){
-          r.updated(f._1, f._2)
-        }
-        else {
-          r.updated(f._1, kb.heap.rc.freshValRef())
-        }
-      })
-      m.updated(k, Obj(k, updatedFields))
-    }))
+        val updatedFields = kb.heap.objMap(k).fields.foldLeft(Map[String, ValRef]())((r, f) => {
+          if (retained.contains(k) && retained(k).contains(f._1)) {
+            r.updated(f._1, f._2)
+          }
+          else {
+            r.updated(f._1, kb.heap.rc.freshValRef())
+          }
+        })
+        m.updated(k, Obj(k, updatedFields))
+      }))
     kb.withHeap(heap)
   }
 
@@ -726,16 +725,24 @@ case class MethodInference(engine: ReasoningEngine,
       (true, afterExhales)
     }
     else {
-
-      // inhale the posts in correct order
-      val extendedPosts = initial.posts ++ spec._2
       // reinitialize the targets
       val afterClearing = targets.foldLeft(afterExhales)((kb, t) => {
         val ref = kb.assignment.rc.freshValRef()
         kb.withAssignment(kb.assignment.assign(t.name, ref, t.typ))
       })
+
+      // inhale the posts in correct order
+      val extendedPosts = initial.posts ++ spec._2
+
+      // replace the variables in the post conditions with the targets of the callsite
+      val ts = MapTermSub(initial.res
+        .map(a => VarTerm(a._1, a._2))
+        .zip(targets)
+        .toMap)
+      val adjustedPosts = extendedPosts.map(e => e.substitute(ts).asInstanceOf[LogicTerm])
+
       // TODO: fix restart flag stuff
-      val afterInhales = extendedPosts.foldLeft(afterClearing)((kb, p) => processLine(kb, InhaleLine(ln, p))._2)
+      val afterInhales = adjustedPosts.foldLeft(afterClearing)((kb, p) => processInhaleLine(kb, before, InhaleLine(ln, p))._2)
 
       (false, afterInhales)
     }
@@ -878,6 +885,10 @@ case class MethodInference(engine: ReasoningEngine,
   }
 
   private def processInhaleLine(before: KnowledgeBase, line: InhaleLine): (Boolean, KnowledgeBase) = {
+    processInhaleLine(before, before, line)
+  }
+
+  private def processInhaleLine(before: KnowledgeBase, old: KnowledgeBase, line: InhaleLine): (Boolean, KnowledgeBase) = {
     val InhaleLine(ln, exp) = line
     val rawFolded = PredicateCollector.collectFoldedPredicates(this.engine, exp, before)
     val rawDirect = PredicateCollector.collectDirectPredicates(this.engine, exp, before)
@@ -885,11 +896,11 @@ case class MethodInference(engine: ReasoningEngine,
     val rawPartial = PredicateCollector.collectPotSatImpls(this.engine, exp, before)
     val rawMagic = PredicateCollector.collectBaguettes(this.engine, exp, before)
 
-    val (kb1, folded) = TermNormalization.normalizeFoldedRequirements(before, rawFolded)
-    val (kb2, direct) = TermNormalization.normalizeDirectRequirements(kb1, rawDirect)
-    val (kb3, stripped) = TermNormalization.normalizeLogicTerm(kb2, rawStripped)
-    val (kb33, partial) = TermNormalization.normalizePotentialRequirements(kb3, rawPartial)
-    val (kb4, baguettes) = TermNormalization.normalizeBaguetteRequirements(kb33, rawMagic)
+    val (kb1, folded) = TermNormalization.normalizeFoldedRequirements(before, old, rawFolded)
+    val (kb2, direct) = TermNormalization.normalizeDirectRequirements(kb1, old, rawDirect)
+    val (kb3, stripped) = TermNormalization.normalizeLogicTerm(kb2, old, rawStripped)
+    val (kb33, partial) = TermNormalization.normalizePotentialRequirements(kb3, old, rawPartial)
+    val (kb4, baguettes) = TermNormalization.normalizeBaguetteRequirements(kb33, old, rawMagic)
 
 
     // TODO: normalize the folded, direct, partial and stripped (EVERYWHERE)
@@ -1295,7 +1306,7 @@ case class MethodInference(engine: ReasoningEngine,
     }
   }
 
-  def infer(program: Program, meth: InternalMethod) = {
+  def infer(program: Program, meth: InternalMethod, inductionStart: Boolean) = {
     // generate mapping of field definitions to their corresponding type
     val fieldTypes = program.fields.map(f => f.name -> f.typ).toMap
 
@@ -1367,10 +1378,10 @@ case class MethodInference(engine: ReasoningEngine,
             println(s":::::::::::::::: AFTER ${current.pretty()} :::::::::::::::::")
             println(after.pretty())
 
-//            if(restarting)
-//            {
-//              throw new IllegalArgumentException("STOPPING")
-//            }
+            //            if(restarting)
+            //            {
+            //              throw new IllegalArgumentException("STOPPING")
+            //            }
 
 
             setKnowledgeBase(current, after)
@@ -1415,10 +1426,11 @@ case class MethodInference(engine: ReasoningEngine,
 
         val finalKbs = this.knowledge(meth.stop).values
 
-        finalKbs.foreach(finalKb => {
-          // TODO: the refolding strategies must match
-          // TODO: the injections must be cleared per path/across all paths
-          val mergedPosts = (meth.posts ++ this.methSpec(this.currentMethod.method)._2).reverse
+        // TODO: the refolding strategies must match
+        // TODO: the injections must be cleared per path/across all paths
+        val mergedPosts = (meth.posts ++ this.methSpec(this.currentMethod.method)._2).reverse
+
+        val afterPostsKbs = finalKbs.map(finalKb => {
 
           val finInj = this.currentMethod.finalInj
 
@@ -1426,6 +1438,10 @@ case class MethodInference(engine: ReasoningEngine,
 
           val afterPosts = mergedPosts.foldLeft(finalKb)((kb, p) => processLine(kb, ExhaleLine(meth.stop, finInj, p))._2)
 
+          afterPosts
+        })
+
+        afterPostsKbs.foreach(afterPosts => {
           val originalTypes = program.inferInfo.typeAnnotations(this.currentMethod.method)._1
           val argumentNames = this.currentMethod.args.map(a => a._1)
           println(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
@@ -1456,7 +1472,7 @@ case class MethodInference(engine: ReasoningEngine,
                 val variable = VarTerm(a._1, Ref)
                 val pred = PredInstAccTerm(PredInst(predName, Seq(variable)), PermAmount.WRITE)
 
-//                val prrr = if(this.currentMethod.method.contains("wand")) pred else orgPred
+                //                val prrr = if(this.currentMethod.method.contains("wand")) pred else orgPred
                 val prrr = orgPred
 
                 val refolding = afterPosts.findRefoldingStrategy(this.engine, this.defs, prrr)
@@ -1475,8 +1491,7 @@ case class MethodInference(engine: ReasoningEngine,
                   case None => {
                     val requirement = NotEqCmpTerm(originalRef, NullTerm())
                     val isNotNull = this.engine.provePure(afterPosts, requirement)
-                    if(isNotNull == Sat)
-                    {
+                    if (isNotNull == Sat) {
                       println(s"CHECKING IF PACKAGING IS POSSIBLE FOR: ${a._1}   ${a._2}")
                       val strategy = attemptMagicWandConstruction(afterPosts, originalRef, orgPred)
                       strategy match {
@@ -1530,7 +1545,7 @@ case class MethodInference(engine: ReasoningEngine,
     var current = this.currentMethod.stop
     var bestInjection: Injection = this.currentMethod.finalInj
     var running = true
-    while(current != this.currentMethod.start && running) {
+    while (current != this.currentMethod.start && running) {
       val line: Line = lines(current)
       current = line match {
         // improve localization by detecting if assignment conflicts with folding
@@ -1559,7 +1574,7 @@ case class MethodInference(engine: ReasoningEngine,
         }
         case MergeLine(_, correspondingBranch, postThnInj, postElsInj, lastThn, lastEls) => {
           val bline = lines(correspondingBranch).asInstanceOf[BranchLine]
-          if(kb.path.exists(a => a._1 == bline.thn)){
+          if (kb.path.exists(a => a._1 == bline.thn)) {
             // knowledge base from the then branch
             bestInjection = postThnInj
             lastThn
@@ -1710,7 +1725,7 @@ case class Inference(verifier: Verifier, defs: Map[String, PredDef], reps: Map[S
         val self = Package(magic, proof)()
         Seq(self)
       }
-      // TODO: eliminate perm from the apply step
+        // TODO: eliminate perm from the apply step
       case ApplyStep(wand, perm) => {
 
         val premise = wand.premTerms().reduceLeft((a, b) => AndTerm(a, b)).toExp()
@@ -1809,7 +1824,7 @@ case class Inference(verifier: Verifier, defs: Map[String, PredDef], reps: Map[S
           injections
         )
         val beforeSpec = this.methSpec(f)
-        mi.infer(this.program, this.reps(f))
+        mi.infer(this.program, this.reps(f), true)
         println("::::::::::::::::::::: ADD. SPEC. BEFORE INFERENCE :::::::::::::::::")
         printSpec(beforeSpec)
         println("::::::::::::::::::::: ADD. SPEC. AFTER INFERENCE :::::::::::::::::")
