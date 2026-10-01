@@ -677,13 +677,16 @@ case class Translator(program: PProgram) {
     })
   }
 
-  def instantiateDatatypeTemplate(typ: Type) = {
+  def instantiateDatatypeTemplate(typ: Type): Unit = {
     println(s"-------------------> INSTANTIATING FOR TYPE: ${typ}")
     typ match {
       case d: DatatypeType => {
         if (!(instantiatedDatatypes.contains(typ))) {
           val instantiated = substituteTypeParameters(d)
           instantiatedDatatypes.put(typ, instantiated)
+          instantiated.content.foreach(f => {
+            instantiateDatatypeTemplate(f.typ)
+          })
           val fields = generateFields(typ, instantiated)
           addAllMembers(fields)
           // TODO: reactivate when introducing permission fields in datatype
