@@ -681,9 +681,15 @@ case class MethodInference(engine: ReasoningEngine,
     val initial = this.reps(method)
     val spec = this.methSpec(method)
 
+    val calledMethod = this.reps(method)
+
+    val (afterArgNormalization, normArgs) = TermNormalization.normalizeMutablePartsInTermList(before, before, args)
+
+    val substitution = MapTermSub(calledMethod.args.map(v => VarTerm(v._1, v._2)).zip(normArgs).toMap)
+
     // exhale the pres in reverse order
-    val extendedPres = initial.pres ++ spec._1
-    val (shouldRestart, afterExhales) = extendedPres.reverse.foldLeft((false, before))((acc, p) => {
+    val extendedPres = (initial.pres ++ spec._1).map(v => v.substitute(substitution).asInstanceOf[LogicTerm])
+    val (shouldRestart, afterExhales) = extendedPres.reverse.foldLeft((false, afterArgNormalization))((acc, p) => {
       val (r, kb) = acc
       val strats = getRefoldingStrategiesAtInjectionPoint(inj)
       val (restart, result) = processExhaleLine(kb, ExhaleLine(ln, inj, p))
