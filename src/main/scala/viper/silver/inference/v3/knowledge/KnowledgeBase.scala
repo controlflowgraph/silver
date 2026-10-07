@@ -1,8 +1,8 @@
 package viper.silver.inference.v3.knowledge
 
-import viper.silver.ast.{Ref, Type}
-import viper.silver.inference.v3.{ApplyStep, FoldingStep, MagicWandManager, PredicateCollector, ReasoningEngine, RefCounter, RefoldingStep, RefoldingStrategy, Sat, TermNormalization, UnSat, UnfoldingStep, ValRef}
-import viper.silver.inference.v3.ast.{AndTerm, BaguetteMagic, BoolTerm, EqCmpTerm, FieldAccTerm, GreaterCmpTerm, Ident, ImplTerm, IntTerm, InternalMethod, LessEqCmpTerm, LogicTerm, MapTermSub, MulTerm, PermAmount, PermFracTerm, PredDef, PredFieldAccTerm, PredInst, PredInstAccTerm, Term, TermRewriter, TermSub, VarTerm}
+import viper.silver.ast.{Perm, Ref, Type}
+import viper.silver.inference.v3.{ApplyStep, FoldingStep, MagicWandManager, PackageStep, PotSat, PredicateCollector, ReasoningEngine, RefCounter, RefoldingStep, RefoldingStrategy, Sat, TermNormalization, UnSat, UnfoldingStep, ValRef}
+import viper.silver.inference.v3.ast.{AddTerm, AndTerm, BaguetteMagic, BoolTerm, CondTerm, EqCmpTerm, FieldAccTerm, GreaterCmpTerm, Ident, ImplTerm, IntTerm, InternalMethod, LessEqCmpTerm, LogicTerm, LogicTermRewriting, MapTermSub, MulTerm, PermAmount, PermFracTerm, PredDef, PredFieldAccTerm, PredInst, PredInstAccTerm, SubTerm, Term, TermRewriter, TermSub, VarTerm}
 
 import scala.collection.mutable
 
@@ -295,9 +295,47 @@ case class KnowledgeBase(path: Seq[(Ident, Term)], assignment: Assignment, heap:
         .filter(i => isNotZeroPerm(engine, i.perm))
         .toSeq
 
+      // find applicable magic wands
+      val applicable = this.mwm.wands.flatMap(w => {
+          val alreadyInDirect = w.foldedCons.toSeq.filter(p => p.pred.equals(fa.pred))
+          val inPartialKnowledge = w.partialCons.toSeq
+            .filter(p => engine.provePure(this, p.prem) == Sat)
+            .flatMap(p => PredicateCollector.collectFoldedPredicates(engine, p.cons, this))
+            .flatMap(f => findUnfoldingStrategyInPredicate(engine, defs, fa, f))
+          val selfInPartial = w.partialCons.toSeq
+            .filter(p => engine.provePure(this, p.prem) == Sat)
+            .flatMap(p => PredicateCollector.collectFoldedPredicates(engine, p.cons, this))
+            .exists(f => f.pred.equals(fa.pred))
+          val unfoldingStrats = w.foldedCons.toSeq.flatMap(f => findUnfoldingStrategyInPredicate(engine, defs, fa, f))
+          val selfInFolded = w.foldedCons.exists(p => p.pred.equals(fa.pred))
+          println(s"CHECKING -------- ${fa.pretty()}   IN    ${w.pretty()}    ${this.path}")
+          println(s"in direct: ${alreadyInDirect.nonEmpty}")
+          println(s"in partial: ${inPartialKnowledge.nonEmpty}")
+          println(s"in unfolding: ${unfoldingStrats.nonEmpty}")
+          println("CHECKING STOP -----")
+          if (selfInFolded || selfInPartial || alreadyInDirect.nonEmpty || inPartialKnowledge.nonEmpty || unfoldingStrats.nonEmpty) {
+            Some((w, Seq(ApplyStep(w, PermAmount.WRITE)) ++ inPartialKnowledge ++ unfoldingStrats))
+          }
+          else {
+            None
+          }
+        })
+        .filter(a => {
+          val w = a._1
+          val allDirects = w.directPrem.forall(p => {
+            isNotZeroPerm(engine, this.direct.getAmount(p.exp))
+          })
+          val allFolded = w.foldedPrem.forall(p => {
+            isNotZeroPerm(engine, this.folded.getAmount(p.pred))
+          })
+          allDirects && allFolded
+        })
+        .flatMap(a => a._2)
+        .toSeq
+
       val strats = mapped.flatMap(v => findUnfoldingStrategyInPredicate(engine, defs, fa, v))
-      if (strats.nonEmpty) {
-        Some(RefoldingStrategy(strats))
+      if (applicable.nonEmpty || strats.nonEmpty) {
+        Some(RefoldingStrategy(applicable ++ strats))
       }
       else {
         None
@@ -350,6 +388,7 @@ case class KnowledgeBase(path: Seq[(Ident, Term)], assignment: Assignment, heap:
       val applicable = this.mwm.wands.flatMap(w => {
           val alreadyInDirect = w.directCons.map(_.exp).contains(fa.exp)
           val unfoldingStrats = w.foldedCons.toSeq.flatMap(f => findUnfoldingStrategyInPredicate(engine, defs, fa, f))
+          // TODO: extend with partial knowledge
           if (alreadyInDirect || unfoldingStrats.nonEmpty) {
             Some((w, Seq(ApplyStep(w, PermAmount.WRITE)) ++ unfoldingStrats))
           }
@@ -389,20 +428,18 @@ case class KnowledgeBase(path: Seq[(Ident, Term)], assignment: Assignment, heap:
     val predDef = defs(pred.name)
 
     val instantiated = predDef.instantiate(pred)
-    val directRaw = PredicateCollector.collectDirectPredicates(engine, instantiated, this)
-    val foldedRaw = PredicateCollector.collectFoldedPredicates(engine, instantiated, this)
-    val partialRaw = PredicateCollector.collectPotSatImpls(engine, instantiated, this)
-    val pureRaw = PredicateCollector.stripToPure(engine, instantiated, this)
 
-    val (kb1, folded) = TermNormalization.normalizeFoldedRequirements(this, foldedRaw)
-    val (kb2, direct) = TermNormalization.normalizeDirectRequirements(kb1, directRaw)
-    val (kb3, partial) = TermNormalization.normalizePotentialRequirements(kb2, partialRaw)
-    val (kb4, pure) = TermNormalization.normalizeLogicTerm(kb3, pureRaw)
+    val (afterNorm, body) = TermNormalization.normalizeMutablePartsInLogicTerm(this, this, instantiated)
+
+    val direct = PredicateCollector.collectDirectPredicates(engine, body, afterNorm)
+    val folded = PredicateCollector.collectFoldedPredicates(engine, body, afterNorm)
+    val partial = PredicateCollector.collectPotSatImpls(engine, body, afterNorm)
+    val pure = PredicateCollector.stripToPure(engine, body, afterNorm)
 
     // TODO: NORMALIZE THE CONTENT OF THE PREDICATE OTHERWISE IT DOES NOT PARSE CORRECTLY
 
     // exhale the folded predicate amount
-    val exhaled = kb4.update((a, h, d, f, i, p) => (a, h, d, f.exhale(pred, perm), i, p))
+    val exhaled = afterNorm.update((a, h, d, f, i, p) => (a, h, d, f.exhale(pred, perm), i, p))
 
     // TODO: check for any knowledge where access has been lost and eliminate info
     //          ---> for inhale and exhale
@@ -491,32 +528,142 @@ case class KnowledgeBase(path: Seq[(Ident, Term)], assignment: Assignment, heap:
 
     // todo: normalization of internals might lead to duplicate initialization of field temp variables
     val instantiated = predDef.instantiate(f.pred)
-    val rawFolded = PredicateCollector.collectFoldedPredicates(engine, instantiated, this)
-    val rawDirect = PredicateCollector.collectDirectPredicates(engine, instantiated, this)
-    val rawStripped = PredicateCollector.stripToPure(engine, instantiated, this)
-    val rawPartial = PredicateCollector.collectPotSatImpls(engine, instantiated, this)
-    val rawMagic = PredicateCollector.collectBaguettes(engine, instantiated, this)
 
-    val (kb1, folded) = TermNormalization.normalizeFoldedRequirements(this, rawFolded)
-    val (kb2, direct) = TermNormalization.normalizeDirectRequirements(kb1, rawDirect)
-    val (kb3, stripped) = TermNormalization.normalizeLogicTerm(kb2, rawStripped)
-    val (kb33, partial) = TermNormalization.normalizePotentialRequirements(kb3, rawPartial)
-    val (kb4, baguettes) = TermNormalization.normalizeBaguetteRequirements(kb33, rawMagic)
+    val (afterNorm, normTerm) = TermNormalization.normalizeMutablePartsInLogicTerm(this, this, instantiated)
 
+    val folded = PredicateCollector.collectFoldedPredicatesExtended(engine, normTerm, afterNorm)
+    val direct = PredicateCollector.collectDirectPredicates(engine, normTerm, afterNorm)
+    val stripped = PredicateCollector.stripToPure(engine, normTerm, afterNorm)
+    val partial = PredicateCollector.collectPotSatImpls(engine, normTerm, afterNorm)
+    val baguettes = PredicateCollector.collectBaguettes(engine, normTerm, afterNorm)
 
     println(s"CHECKING FOR PARTIAL IN THE REFOLDING STRATEGY:")
     println(f.pretty())
     partial.foreach(p => println(p.pretty()))
 
-    val mappedDirect = direct.map(d => kb4.findUnfoldingStrategy(engine, defs, d))
-    val mappedFolded = folded.map(f => kb4.findRefoldingStrategy(engine, defs, f))
-    val mappedPartial = partial.map(p => kb4.findUnfoldingStrategy(engine, defs, p))
+    println("CHECKING FOR FOLDED IN THE REFOLDING STRATEGY:")
+    println(f.pretty())
+    folded.foreach(p => println(p.pretty()))
+
+    val mappedDirect = direct.map(d => afterNorm.findUnfoldingStrategy(engine, defs, d))
+    val mappedFolded = folded.map(f => afterNorm.findRefoldingStrategy(engine, defs, f))
+    val mappedPartial = partial.map(p => afterNorm.findUnfoldingStrategy(engine, defs, p))
 
     println(s"CHECKING FOR DIRECT REQUIREMENTS:")
     println(s"${direct.zip(mappedDirect).map(v => s"${v._1.pretty()}   =>  ${v._2}").mkString("\n").indent(2)}")
 
     mergeRefoldingStrategyOptions(mappedDirect ++ mappedFolded ++ mappedPartial)
       .map(r => RefoldingStrategy(r.steps ++ Seq(FoldingStep(f.pred, f.perm))))
+  }
+
+  def findRepackagingStrategy(engine: ReasoningEngine, defs: Map[String, PredDef], wand: BaguetteMagic): Option[RefoldingStrategy] = {
+    println(s"Processing repackaging start: ${wand.pretty()}")
+    // preparing the knowledge base to perform the packaging procedure
+    val extendedWithDirect = wand.directPrem.foldLeft(this)((a, b) => {
+      // create a fresh temp variable which represents the current permission amount for this field
+      val rc = a.assignment.rc
+      val current = a.direct.getAmount(b.exp)
+      val res = rc.freshValRef().toVarTerm(Perm)
+
+      // setting the current permission amount to a max of 1/1
+      val conditioned = CondTerm(
+        LessEqCmpTerm(AddTerm(b.perm, current), PermAmount.WRITE),
+        AddTerm(b.perm, current),
+        PermAmount.WRITE
+      )
+
+      // update the entry in the direct permission mask
+      val dir = DirectPermissionMask(a.direct.permissions.updated(b.exp, res))
+
+      // update the knowledge base
+      a.withDirect(dir)
+        .extendInfo(EqCmpTerm(res, conditioned))
+    })
+
+    val extendedWithFolded = wand.foldedPrem.foldLeft(extendedWithDirect)((a, b) => {
+      // create a fresh temp variable which represents the current permission amount for this predicate
+      val rc = a.assignment.rc
+      val current = a.folded.getAmount(b.pred)
+      val res = rc.freshValRef().toVarTerm(Perm)
+
+      // setting the current permission amount to a max of 1/1
+      val conditioned = CondTerm(
+        LessEqCmpTerm(AddTerm(b.perm, current), PermAmount.WRITE),
+        AddTerm(b.perm, current),
+        PermAmount.WRITE
+      )
+
+      // update the entry in the direct permission mask
+      val fol = FoldedPermissionMask(a.folded.permissions.updated(b.pred, res))
+
+      // update the knowledge base
+      a.withFolded(fol)
+        .extendInfo(EqCmpTerm(res, conditioned))
+    })
+
+    // TODO: this guarding strategy does not work!!!!
+    // -> cleaning with potential does not work just like that
+    // -> it allows 2/1 permissions
+    val extendedWithPartial = wand.partialPrem.foldLeft(extendedWithFolded)((a, b) => {
+      a.withPartial(a.partial.inhale(Seq(b)))
+    })
+
+    val afterExtension = extendedWithPartial
+
+    val afterCleaned = afterExtension.cleanPotentialWithCurrentKnowledge(engine)
+
+    // finding a refolding strategy
+    val (additionalDirect, additionalFolded) = wand.partialCons.foldLeft((Seq[PredFieldAccTerm](), Seq[PredInstAccTerm]()))((acc, d) => {
+      val proofRes = engine.provePure(afterCleaned, d.prem)
+      println(s"${d.prem.pretty()} has proof result: ${proofRes}")
+      if (proofRes == Sat) {
+        // anything else is assumed to not be contained
+        val dirs = PredicateCollector.collectDirectPredicates(engine, d.cons, afterCleaned)
+        val fols = PredicateCollector.collectFoldedPredicates(engine, d.cons, afterCleaned)
+        println(s"DIRS: ${dirs}")
+        println(s"FOLS: ${fols}")
+        (acc._1 ++ dirs, acc._2 ++ fols)
+      }
+      else {
+        // if the premise of this partial info is not satisfied then it is assumed to always hold
+        (Seq(), Seq())
+      }
+    })
+
+    println(s"ADDITIONAL DIRECT: ${}")
+    println(additionalDirect.map(_.pretty()).mkString(" &&&& "))
+    println(additionalFolded.map(_.pretty()).mkString(" &&&& "))
+
+    println(LogicTermRewriting.untangle(afterCleaned).pretty())
+    println(afterCleaned.pretty())
+
+
+    val (kbDirect, directStrategies) = (wand.directCons ++ additionalDirect).foldLeft((afterCleaned, Seq[Option[RefoldingStrategy]]()))((acc, d) => {
+      val strat = acc._1.findUnfoldingStrategy(engine, defs, d)
+      val applied = strat.map(s => acc._1.applyRefoldingStrategy(engine, defs, s)).getOrElse(acc._1)
+      (applied, acc._2 ++ Seq(strat))
+    })
+
+    val (_, foldedStrategies) = (wand.foldedCons ++ additionalFolded).foldLeft((kbDirect, Seq[Option[RefoldingStrategy]]()))((acc, d) => {
+      val strat = acc._1.findRefoldingStrategy(engine, defs, d)
+      val applied = strat.map(s => acc._1.applyRefoldingStrategy(engine, defs, s)).getOrElse(acc._1)
+      (applied, acc._2 ++ Seq(strat))
+    })
+
+    directStrategies.foreach(a => println(a))
+    foldedStrategies.foreach(a => println(a))
+
+
+    val mergedStrategies = directStrategies ++ foldedStrategies
+
+    val combined = mergedStrategies.foldLeft(Some(Seq()).asInstanceOf[Option[Seq[RefoldingStep]]])((c, s) => {
+        c.flatMap(a => s.map(q => a ++ q.steps))
+      })
+      .map(s => RefoldingStrategy(Seq(PackageStep(wand, s))))
+
+    println(s"Processing repackaging stop: ${wand.pretty()}")
+
+    combined
   }
 
   def findRefoldingStrategy(engine: ReasoningEngine, defs: Map[String, PredDef], f: PredInstAccTerm): Option[RefoldingStrategy] = {
@@ -586,6 +733,246 @@ case class KnowledgeBase(path: Seq[(Ident, Term)], assignment: Assignment, heap:
       this.mwm,
       this.fieldTypes
     )
+  }
+
+  def cleanPotentialWithCurrentKnowledge(engine: ReasoningEngine): KnowledgeBase = {
+    // TODO: improve this to only invoke prover a single time
+    val sat = this.partial.partial.filter(p => engine.provePureWithPotential(this, p.prem).equals(Sat))
+      .map(p => p.cons)
+    val unsat = this.partial.partial.filter(p => engine.provePureWithPotential(this, p.prem).equals(UnSat))
+    val potsat = this.partial.partial.filter(p => engine.provePureWithPotential(this, p.prem).equals(PotSat))
+
+    //    println("CLEANING PROGRAM:")
+    //    println(s"SAT: ${sat.map(_.pretty())}")
+    //    println(s"UNSAT: ${unsat.map(_.pretty())}")
+    //    println(s"POTSAT: ${potsat.map(_.pretty())}")
+
+    if (sat.isEmpty && unsat.isEmpty) {
+      this
+    }
+    else {
+      val redPot = this.update((a, h, d, f, i, _) => (a, h, d, f, i, Potential(potsat)))
+      sat.foldLeft(redPot)((kb, r) => {
+        val dirs = PredicateCollector.collectDirectPredicates(engine, r, kb)
+        val folds = PredicateCollector.collectFoldedPredicates(engine, r, kb)
+        val pots = PredicateCollector.collectPotSatImpls(engine, r, kb)
+        val pure = PredicateCollector.stripToPure(engine, r, kb)
+        kb.update((a, h, d, f, i, p) => {
+          val ud = dirs.foldLeft(d)((a, b) => a.inhale(b))
+          val uf = folds.foldLeft(f)((a, b) => a.inhale(b))
+          val ui = i.and(pure)
+          val up = p.inhale(pots)
+          (a, h, ud, uf, ui, up)
+        })
+      })
+    }
+  }
+
+  private def applyRefoldingStep(engine: ReasoningEngine, defs: Map[String, PredDef], base: KnowledgeBase, step: RefoldingStep): KnowledgeBase = {
+    step match {
+      case FoldingStep(pred, perm) => {
+        // if in the future the folding step has sub steps to fold other stuff beforehand then
+        // insert the folding here before folding self
+
+        // fold self
+        base.fold(engine, defs, pred, perm)
+      }
+      case UnfoldingStep(pred, perm, subs) => {
+        // unfold the predicate on the current level
+        val unfolded = base.unfold(engine, defs, pred, perm)
+        // unfold all the steps within this predicate
+        // the substeps are scaled by the amount that the current unfolding actually unfolded
+        subs.map(s => s.scale(perm))
+          .foldLeft(unfolded)((a, b) => applyRefoldingStep(engine, defs, a, b))
+      }
+      case PackageStep(wand, steps) => {
+        println(s"Processing: ${wand.pretty()}")
+        // preparing the knowledge base to perform the packaging procedure
+        val extendedWithDirect = wand.directPrem.foldLeft(base)((a, b) => {
+          // create a fresh temp variable which represents the current permission amount for this field
+          val rc = a.assignment.rc
+          val current = a.direct.getAmount(b.exp)
+          val res = rc.freshValRef().toVarTerm(Perm)
+
+          // setting the current permission amount to a max of 1/1
+          val conditioned = CondTerm(
+            LessEqCmpTerm(AddTerm(b.perm, current), PermAmount.WRITE),
+            AddTerm(b.perm, current),
+            PermAmount.WRITE
+          )
+
+          // update the entry in the direct permission mask
+          val dir = DirectPermissionMask(a.direct.permissions.updated(b.exp, res))
+
+          // update the knowledge base
+          a.withDirect(dir)
+            .extendInfo(EqCmpTerm(res, conditioned))
+        })
+
+        val extendedWithFolded = wand.foldedPrem.foldLeft(extendedWithDirect)((a, b) => {
+          // create a fresh temp variable which represents the current permission amount for this predicate
+          val rc = a.assignment.rc
+          val current = a.folded.getAmount(b.pred)
+          val res = rc.freshValRef().toVarTerm(Perm)
+
+          // setting the current permission amount to a max of 1/1
+          val conditioned = CondTerm(
+            LessEqCmpTerm(AddTerm(b.perm, current), PermAmount.WRITE),
+            AddTerm(b.perm, current),
+            PermAmount.WRITE
+          )
+
+          // update the entry in the direct permission mask
+          val fol = FoldedPermissionMask(a.folded.permissions.updated(b.pred, res))
+
+          // update the knowledge base
+          a.withFolded(fol)
+            .extendInfo(EqCmpTerm(res, conditioned))
+        })
+
+        //        println("EXTENDED WITH DIRECT STUFF:")
+        //        println(extendedWithFolded.pretty())
+
+        // applying the steps of the packaging procedure
+        val afterSteps = steps.foldLeft(extendedWithFolded)((k, s) => applyRefoldingStep(engine, defs, k, s))
+        //        println("AFTER STEPS:")
+        //        println(afterSteps.pretty())
+
+        // exhaling the permissions which are the consequence of the magic wand
+        val exhaledDirect = wand.directCons.foldLeft(afterSteps)((k, d) => k.withDirect(k.direct.exhale(d)))
+        val exhaledFolded = wand.foldedCons.foldLeft(exhaledDirect)((k, d) => k.withFolded(k.folded.exhale(d)))
+
+        //        println("AFTER EXHALING RESULT:")
+        //        println(exhaledFolded.pretty())
+
+        // adding the magic wand to the current context
+        val inhalingWand = exhaledFolded.withMWM(exhaledFolded.mwm.addWand(wand))
+
+        //        println("AFTER INHALING WAND:")
+        //        println(inhalingWand.pretty())
+
+        // reconstruction of remaining permissions after performing the folding operations
+        val dirKeys = wand.directPrem.map(d => d.exp)
+          .union(wand.directCons.map(d => d.exp))
+          .union(base.direct.permissions.keySet)
+          .union(extendedWithDirect.direct.permissions.keySet)
+          .union(inhalingWand.direct.permissions.keySet)
+
+        val foldedKeys = wand.foldedPrem.map(d => d.pred)
+          .union(wand.foldedCons.map(d => d.pred))
+          .union(base.folded.permissions.keySet)
+          .union(extendedWithDirect.folded.permissions.keySet)
+          .union(inhalingWand.folded.permissions.keySet)
+
+        val adjustedDirects = dirKeys.foldLeft(inhalingWand)((k, d) => {
+          // currently hypothetical formula:
+          // used amount = before packaging - after packaging
+          // adjusted = provided - (used - prem)
+
+          // determine the amount that is provided before the packaging step
+          val provided = base.direct.getAmount(d)
+          // determine the amount used by the folding procedure
+          val before = extendedWithFolded.direct.getAmount(d)
+          val after = inhalingWand.direct.getAmount(d)
+          val used = SubTerm(before, after)
+
+          // determine the amount that is specified in the premise of the magic wand
+          val prem = wand.directPrem.filter(p => p.exp.equals(d))
+            .map(d => d.perm)
+            .reduceLeftOption(AddTerm)
+            .getOrElse(PermAmount.NONE)
+
+          // prevent unfolding internally to influence the outside permission value
+          val conditioned = CondTerm(
+            LessEqCmpTerm(SubTerm(used, prem), PermAmount.NONE),
+            PermAmount.NONE,
+            SubTerm(used, prem)
+          )
+
+          // compute the adjusted amount using the given hypothetical formula
+          val adjusted = SubTerm(provided, conditioned)
+
+          //          println(s"SIMP ADJUSTED   ${d.pretty()}: ${TermRewriter.simplify(adjusted).pretty()}")
+
+          k.withDirect(DirectPermissionMask(k.direct.permissions.updated(d, adjusted)))
+        })
+
+        val adjustedFolded = foldedKeys.foldLeft(adjustedDirects)((k, d) => {
+          // before = base + prem >= 1/1 ? 1/1 : base + prem
+          // used = before - after
+          // adjusted = provided - (used - prem <= 0/1 ? 0/1 : used - prem)
+
+          // determine the amount that is provided before the packaging step
+          val provided = base.folded.getAmount(d)
+          // determine the amount used by the folding procedure
+          val before = extendedWithFolded.folded.getAmount(d)
+          val after = inhalingWand.folded.getAmount(d)
+          val used = SubTerm(before, after)
+
+          // determine the amount that is specified in the premise of the magic wand
+          val prem = wand.foldedPrem.filter(p => p.pred.equals(d))
+            .map(d => d.perm)
+            .reduceLeftOption(AddTerm)
+            .getOrElse(PermAmount.NONE)
+
+          // prevent unfolding internally to influence the outside permission value
+          val conditioned = CondTerm(
+            LessEqCmpTerm(SubTerm(used, prem), PermAmount.NONE),
+            PermAmount.NONE,
+            SubTerm(used, prem)
+          )
+
+          // compute the adjusted amount using the given hypothetical formula
+          val adjusted = SubTerm(provided, conditioned)
+
+          //          println(s"SIMP ADJUSTED   ${d.pretty()}: ${TermRewriter.simplify(adjusted).pretty()}")
+
+          k.withFolded(FoldedPermissionMask(k.folded.permissions.updated(d, adjusted)))
+        })
+
+        //        println("AFTER ADJUSTING REMAINING PERMISSIONS:")
+        //        println(adjustedFolded.pretty())
+
+        adjustedFolded
+      }
+      case ApplyStep(wand, perm) => {
+        //        println(s"APPLYING MW: ${wand.pretty()}")
+        // exhale the premise of the magic wand
+        val exDirPrem = wand.directPrem.foldLeft(base)((k, d) => {
+          val scaled = PredFieldAccTerm(d.exp, MulTerm(d.perm, perm))
+          k.withDirect(k.direct.exhale(scaled))
+        })
+        val exFolPrem = wand.foldedPrem.foldLeft(exDirPrem)((k, f) => {
+          val scaled = PredInstAccTerm(f.pred, MulTerm(f.perm, perm))
+          k.withFolded(k.folded.exhale(scaled))
+        })
+
+        // inhale the consequence of the magic wand
+        val inDirCons = wand.directCons.foldLeft(exFolPrem)((k, f) => {
+          val scaled = PredFieldAccTerm(f.exp, MulTerm(f.perm, perm))
+          k.withDirect(k.direct.inhale(scaled))
+        })
+        val inFolCons = wand.foldedCons.foldLeft(inDirCons)((k, f) => {
+          val scaled = PredInstAccTerm(f.pred, MulTerm(f.perm, perm))
+          k.withFolded(k.folded.inhale(scaled))
+        })
+
+        // remove the magic wand from the
+        val remWand = inFolCons.withMWM(inFolCons.mwm.removeWand(wand))
+
+        //        println("AFTER APPLYING MW:")
+        //        println(remWand.pretty())
+
+        remWand
+      }
+      case c => {
+        throw new IllegalArgumentException(s"Unable to process refolding step type ${c.getClass.getCanonicalName}")
+      }
+    }
+  }
+
+  def applyRefoldingStrategy(engine: ReasoningEngine, defs: Map[String, PredDef], refolding: RefoldingStrategy): KnowledgeBase = {
+    refolding.steps.foldLeft(this)((a, b) => applyRefoldingStep(engine, defs, a, b))
   }
 }
 

@@ -2,8 +2,8 @@ package viper.silver.inference.v3.ast
 
 import org.apache.commons.io.filefilter.PrefixFileFilter
 import viper.silver.ast.{Add, And, BoolLit, CondExp, CurrentPerm, EqCmp, Exp, Field, FieldAccess, FieldAccessPredicate, FractionalPerm, GeCmp, GtCmp, Implies, IntLit, IntPermMul, LeCmp, LocalVar, LtCmp, MagicWand, Minus, Mul, NeCmp, Not, NullLit, Old, Or, PermAdd, PermMinus, PermMul, PredicateAccess, PredicateAccessPredicate, Ref, Sub, Type}
-import viper.silver.inference.v3.FixedPoint
-import viper.silver.inference.v3.knowledge.KnowledgeBase
+import viper.silver.inference.v3.{FixedPoint, MagicWandManager, ValRef}
+import viper.silver.inference.v3.knowledge.{Assignment, DirectPermissionMask, FoldedPermissionMask, Heap, KnowledgeBase, Obj, Potential}
 
 trait TermSub {
   def apply(t: Term): Term
@@ -157,10 +157,10 @@ case class NegTerm(t: Term) extends Term {
 
   override def toExp(): Exp = {
     val exp = this.t.toExp()
-    if(exp.typ.equals(viper.silver.ast.Perm)){
+    if (exp.typ.equals(viper.silver.ast.Perm)) {
       PermMinus(exp)()
     }
-    else{
+    else {
       Minus(exp)()
     }
   }
@@ -641,7 +641,7 @@ case class BaguetteMagic(directPrem: Set[PredFieldAccTerm], foldedPrem: Set[Pred
     s"${cond} --* ${cons}"
   }
 
-  def rewrite(ts: TermSub) : BaguetteMagic = {
+  def rewrite(ts: TermSub): BaguetteMagic = {
     val dirsPrem = this.directPrem.map(d => d.rewrite(ts))
     val folsPrem = this.foldedPrem.map(f => f.rewrite(ts))
     val partPrem = this.partialPrem.map(f => f.rewrite(ts))
@@ -669,7 +669,7 @@ case class BaguetteMagic(directPrem: Set[PredFieldAccTerm], foldedPrem: Set[Pred
     val dirsCons = this.directCons.map(d => d.substitute(ts).asInstanceOf[PredFieldAccTerm])
     val folsCons = this.foldedCons.map(f => f.substitute(ts).asInstanceOf[PredInstAccTerm])
     val partCons = this.partialCons.map(f => f.substitute(ts).asInstanceOf[ImplTerm])
-    BaguetteMagic(dirsPrem, folsPrem, partPrem,  dirsCons, folsCons, partCons)
+    BaguetteMagic(dirsPrem, folsPrem, partPrem, dirsCons, folsCons, partCons)
   }
 
   override def toExp(): Exp = {
@@ -834,8 +834,7 @@ object TermRewriter {
   }
 }
 
-object LogicTermRewriting
-{
+object LogicTermRewriting {
   private def simpConj: Seq[TermSub] = Seq(
     FuncTermSub {
       case AndTerm(BoolTerm(true), b) => b
@@ -865,11 +864,10 @@ object LogicTermRewriting
   )
 
 
-
   private def containsLT(term: Term, pattern: LogicTerm): Boolean = {
     term match {
       case lt: LogicTerm => {
-        if(term.equals(pattern)){
+        if (term.equals(pattern)) {
           true
         }
         else {
@@ -877,11 +875,11 @@ object LogicTermRewriting
             case AndTerm(a, b) => containsLT(a, pattern) || containsLT(b, pattern)
             case BaguetteMagic(directPrem, foldedPrem, partialPrem, directCons, foldedCons, partialCons) => {
               directPrem.exists(a => containsLT(a, pattern)) ||
-              foldedPrem.exists(a => containsLT(a, pattern)) ||
-              partialPrem.exists(a => containsLT(a, pattern)) ||
-              directCons.exists(a => containsLT(a, pattern)) ||
-              foldedCons.exists(a => containsLT(a, pattern)) ||
-              partialCons.exists(a => containsLT(a, pattern))
+                foldedPrem.exists(a => containsLT(a, pattern)) ||
+                partialPrem.exists(a => containsLT(a, pattern)) ||
+                directCons.exists(a => containsLT(a, pattern)) ||
+                foldedCons.exists(a => containsLT(a, pattern)) ||
+                partialCons.exists(a => containsLT(a, pattern))
             }
             case BoolTerm(value) => false
             case EqCmpTerm(a, b) => containsLT(a, pattern) || containsLT(b, pattern)
@@ -947,7 +945,7 @@ object LogicTermRewriting
     })
   }
 
-  def untangle(kb: KnowledgeBase): Unit = {
+  def untangle(kb: KnowledgeBase): KnowledgeBase = {
     // to use this for a simplification of the knowledge base the info about the values in the heap needs to be retained compared to just simplifying to true :)
     // collect the equivalences and process a knowledge base afterward
     val subs = Seq(
@@ -962,7 +960,7 @@ object LogicTermRewriting
     var replacements = Seq[(Term, Term)]()
     var current = kb.info
     var running = true
-    while(running) {
+    while (running) {
       val res = FixedPoint.compute(current, (p: LogicTerm) => p.substitute(func).asInstanceOf[LogicTerm])
       val fp = FixedPoint.compute((res, Seq[(Term, Term)]()), (acc: (LogicTerm, Seq[(Term, Term)])) => {
         val (t, s) = acc
@@ -981,17 +979,95 @@ object LogicTermRewriting
       replacements = replacements ++ fp._2
     }
 
-    println(s"REPLACEMENTS DURING UNTANGLE:")
-    replacements.foreach(a => println(s"${a._1.pretty()} => ${a._2.pretty()}"))
-    println(s"RESULT INFO: ${current.pretty()}")
+    //    println(s"REPLACEMENTS DURING UNTANGLE:")
+    //    replacements.foreach(a => println(s"${a._1.pretty()} => ${a._2.pretty()}"))
+    //    println(s"RESULT INFO: ${current.pretty()}")
 
-    val allRefsInHeap = kb.heap.objMap.keySet.map(a => a.toVarTerm(Ref))
-      .union(kb.heap.objMap.values.flatMap(o => o.fields.map(e => e._2.toVarTerm(kb.fieldTypes(e._1)))).toSet)
-    println("REMAPPED:")
-    allRefsInHeap.map(a => (a, FixedPoint.compute(a, (a: Term) => a.substitute(MapTermSub(replacements.toMap)))))
-      .foreach(e => println(s"${e._1.pretty()} == ${e._2.pretty()}"))
+    // TODO: having two variables that are later discovered to be equal
+    //       will result in inconsistent state within the fields of the object
+    //       is this a practical problem?
 
+    val allRefsInHeap = kb.heap.objMap.keySet.map(a => (a, a.toVarTerm(Ref)))
+    val allRefsFromFields = kb.heap.objMap.values.flatMap(o => o.fields.map(e => (e._2, e._2.toVarTerm(kb.fieldTypes(e._1))))).toSet
+    val allRefsInAssignment = kb.assignment.variables.values.map(e => (e._1, e._1.toVarTerm(e._2))).toSet
+    val allRefs = allRefsInHeap.union(allRefsFromFields).union(allRefsInAssignment)
+//    allRefs.foreach(a => println(s"${a._1.pretty()}   ${a._2.pretty()}"))
 
+    val sub = MapTermSub(replacements.toMap)
+    val mapping: (Map[ValRef, ValRef], LogicTerm) = allRefs.foldLeft((Map[ValRef, ValRef](), BoolTerm(true).asInstanceOf[LogicTerm]))((acc, e) => {
+      val result = FixedPoint.compute(e._2, (a: Term) => a.substitute(sub))
+      result match {
+        case VarTerm(name, typ) if (name.startsWith("t$")) =>
+          val ref = ValRef(Integer.parseInt(name.substring(2)))
+          (acc._1.updated(e._1, ref), acc._2)
+        case t => {
+          val fresh = kb.assignment.rc.freshValRef()
+          (acc._1.updated(e._1, fresh), acc._2.and(EqCmpTerm(fresh.toVarTerm(e._2.typ), t)))
+        }
+      }
+    })
+
+    val refReplacement = (v: ValRef) => mapping._1.getOrElse(v, v)
+    val updatedAssignment = Assignment(
+      kb.assignment.rc,
+      kb.assignment.variables.map(e => {
+        (e._1, (refReplacement(e._2._1), e._2._2))
+      })
+    )
+
+    val updatedPartial = Potential(
+      kb.partial.partial.map(p => {
+        val mappedPrem = FixedPoint.compute(p.prem, (a: Term) => LogicTermRewriting.simplify(a.substitute(sub).asInstanceOf[LogicTerm]))
+        val mappedCons = FixedPoint.compute(p.cons, (a: Term) => LogicTermRewriting.simplify(a.substitute(sub).asInstanceOf[LogicTerm]))
+        ImplTerm(mappedPrem, mappedCons)
+      })
+    )
+
+    val updatedMWM = MagicWandManager(kb.mwm.wands.map(w => {
+      FixedPoint.compute(w, (a: BaguetteMagic) => a.rewrite(sub))
+    }))
+
+    val updatedHeap = Heap(
+      kb.heap.rc,
+      (kb.heap.initialized._1.map(refReplacement),
+        kb.heap.initialized._2.map(t => (refReplacement(t._1), t._2, refReplacement(t._3)))),
+      kb.heap.objMap.map(e => {
+        val self = refReplacement(e._1)
+        val obj = Obj(self,
+          e._2.fields.map(f => (f._1, refReplacement(f._2))))
+        (self, obj)
+      })
+    )
+
+    val updatedInfo = mapping._2
+
+    val updatedFolded = FoldedPermissionMask(kb.folded.permissions.map(e => {
+      val mappedPerm = FixedPoint.compute(e._2, (a: Term) => TermRewriter.simplify(a.substitute(sub)))
+      val mappedArgs = e._1.args.map(q => {
+        FixedPoint.compute(q, (a: Term) => a.substitute(sub))
+      })
+      val inst = PredInst(e._1.name, mappedArgs)
+      (inst, mappedPerm)
+    }))
+
+    val updatedDirect = DirectPermissionMask(kb.direct.permissions.map(e => {
+      val mappedSrc = FixedPoint.compute(e._1.src, (a: Term) => TermRewriter.simplify(a.substitute(sub)))
+      val mappedPerm = FixedPoint.compute(e._2, (a: Term) => TermRewriter.simplify(a.substitute(sub)))
+      val fa = FieldAccTerm(mappedSrc, e._1.field, e._1.typ)
+      (fa, mappedPerm)
+    }))
+
+    KnowledgeBase(
+      kb.path,
+      updatedAssignment,
+      updatedHeap,
+      updatedDirect,
+      updatedFolded,
+      updatedInfo,
+      updatedPartial,
+      updatedMWM,
+      kb.fieldTypes
+    )
   }
 
 }

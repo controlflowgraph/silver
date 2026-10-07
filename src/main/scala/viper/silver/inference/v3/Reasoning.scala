@@ -1,7 +1,7 @@
 package viper.silver.inference.v3
 
 import viper.silver.ast.{Assert, FieldAccessPredicate, InferInfo, Inhale, LocalVarDecl, Method, PredicateAccess, PredicateAccessPredicate, Program, Ref, Seqn, Stmt, Type}
-import viper.silver.inference.v3.ast.{AddTerm, AndTerm, BaguetteMagic, BoolTerm, EqCmpTerm, FieldAccTerm, GreaterCmpTerm, GreaterEqCmpTerm, ImplTerm, IntTerm, LessCmpTerm, LessEqCmpTerm, LogicTerm, MulTerm, NegTerm, NotEqCmpTerm, NotTerm, NullTerm, OrTerm, PermFracTerm, PredFieldAccTerm, PredInstAccTerm, SubTerm, Term, VarTerm}
+import viper.silver.inference.v3.ast.{AddTerm, AndTerm, BaguetteMagic, BoolTerm, CondTerm, EqCmpTerm, FieldAccTerm, GreaterCmpTerm, GreaterEqCmpTerm, ImplTerm, IntTerm, LessCmpTerm, LessEqCmpTerm, LogicTerm, MulTerm, NegTerm, NotEqCmpTerm, NotTerm, NullTerm, OrTerm, PermFracTerm, PredFieldAccTerm, PredInstAccTerm, SubTerm, Term, VarTerm}
 import viper.silver.inference.v3.knowledge.KnowledgeBase
 import viper.silver.verifier.{AbortedExceptionally, AbstractVerificationError, CliOptionError, ConsistencyError, DependencyNotFoundError, ExtensionAbstractVerificationError, Failure, ParseReport, Success, TimeoutOccurred, TypecheckerError, TypecheckerWarning, VerificationError, Verifier, VerifierWarning, errors}
 
@@ -67,6 +67,7 @@ case class ViperReasoningEngine(verifier: Verifier, program: Program) extends Re
       case NullTerm() => Set()
       case PermFracTerm(a, b) => getVariablesFromTerms(Seq(a, b))
       case SubTerm(a, b) => getVariablesFromTerms(Seq(a, b))
+      case CondTerm(cond, left, right) => getVariablesFromTerms(Seq(cond, left, right))
       case t => {
         throw new IllegalArgumentException(s"Unable to extract variables from term of type ${t.getClass.getCanonicalName}")
       }
@@ -200,23 +201,32 @@ case class ViperReasoningEngine(verifier: Verifier, program: Program) extends Re
       new InferInfo()
     )()
 
-    val result = this.verifier.verify(proofProgram)
+    try{
+      val result = this.verifier.verify(proofProgram)
 
-    result match {
-      case Success => Sat
-      case Failure(errs) => {
-        val unexpectedReasoningError = errs.exists {
-          case _: errors.AssertFailed => false
-          case _ => true
+      result match {
+        case Success => Sat
+        case Failure(errs) => {
+          val unexpectedReasoningError = errs.exists {
+            case _: errors.AssertFailed => false
+            case _ => true
+          }
+          if(unexpectedReasoningError && false) {
+            println(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
+            println(proofMethod)
+            println("errors during proof verification:")
+            errs.foreach(e => println(s"${e.getClass.getCanonicalName} ${e.readableMessage}" ))
+            println(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
+          }
+          UnSat
         }
-        if(unexpectedReasoningError && false) {
-          println(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
-          println(proofMethod)
-          println("errors during proof verification:")
-          errs.foreach(e => println(s"${e.getClass.getCanonicalName} ${e.readableMessage}" ))
-          println(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
-        }
-        UnSat
+      }
+    }
+    catch{
+      case e => {
+        println(s"ERRRRRROR: ${e}")
+        println(proofMethod)
+        throw new IllegalArgumentException()
       }
     }
   }

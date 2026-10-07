@@ -122,6 +122,50 @@ object PredicateCollector {
     }
   }
 
+  def collectFoldedPredicatesExtended(engine: ReasoningEngine, term: LogicTerm, kb: KnowledgeBase): Seq[PredInstAccTerm] = {
+    term match {
+      case _: BoolTerm => Seq()
+      case _: EqCmpTerm => Seq()
+      case _: GreaterCmpTerm => Seq()
+      case _: GreaterEqCmpTerm => Seq()
+      case _: LessCmpTerm => Seq()
+      case _: LessEqCmpTerm => Seq()
+      case _: NotEqCmpTerm => Seq()
+      case AndTerm(a, b) => collectFoldedPredicatesExtended(engine, a, kb) ++ collectFoldedPredicatesExtended(engine, b, kb)
+      case i@ImplTerm(prem, cons) =>
+        val result = engine.provePure(kb, prem)
+        println(s"COLLECTING PROOF RESULT FOR: ${prem.pretty()}  ${result}")
+        println(i.pretty())
+        if(prem.pretty().contains("List$$$value")) throw new IllegalArgumentException("WHY!")
+        if (result == Sat) collectFoldedPredicatesExtended(engine, cons, kb)
+        else Seq()
+      case NotTerm(t) =>
+        val included = collectFoldedPredicatesExtended(engine, t, kb)
+        if (included.nonEmpty) {
+          throw new IllegalArgumentException("Predicates within negation!")
+        }
+        Seq()
+      case OrTerm(a, b) =>
+        // based on the assumption that viper does not support disjunctions with resource access stuff
+        val includedA = collectFoldedPredicatesExtended(engine, a, kb)
+        if (includedA.nonEmpty) {
+          throw new IllegalArgumentException("Predicates within disjunction!")
+        }
+        val includedB = collectFoldedPredicatesExtended(engine, b, kb)
+        if (includedB.nonEmpty) {
+          throw new IllegalArgumentException("Predicates within disjunction!")
+        }
+        Seq()
+      case _: PredFieldAccTerm => Seq()
+      case p: PredInstAccTerm => Seq(p)
+      case _: BaguetteMagic => Seq()
+      case _: VarTerm => Seq()
+      case _ =>
+        throw new IllegalArgumentException(s"Unable to extract folded predicates from logic term ${term.getClass.getCanonicalName}")
+    }
+  }
+
+
 
   def collectFoldedPredicates(engine: ReasoningEngine, term: LogicTerm, kb: KnowledgeBase): Seq[PredInstAccTerm] = {
     term match {
@@ -134,7 +178,7 @@ object PredicateCollector {
       case _: NotEqCmpTerm => Seq()
       case AndTerm(a, b) => collectFoldedPredicates(engine, a, kb) ++ collectFoldedPredicates(engine, b, kb)
       case ImplTerm(prem, cons) =>
-        if (engine.proveWithPotential(kb, prem) == Sat) collectFoldedPredicates(engine, cons, kb)
+        if (engine.provePure(kb, prem) == Sat) collectFoldedPredicates(engine, cons, kb)
         else Seq()
       case NotTerm(t) =>
         val included = collectFoldedPredicates(engine, t, kb)
