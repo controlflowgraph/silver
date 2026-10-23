@@ -110,7 +110,9 @@ case class ViperReasoningEngine(verifier: Verifier, program: Program) extends Re
 
   def prove(kb: KnowledgeBase, target: LogicTerm): ProofResult = {
     // get the variables used in all kinds of terms in the knowledge base
-    val usedVars = getVariablesOfKnowledgeBase(kb.fieldTypes, kb)
+    val kbVars = getVariablesOfKnowledgeBase(kb.fieldTypes, kb)
+    val targetVars = getVariablesFromTerm(target)
+    val usedVars = kbVars.union(targetVars)
     val decls = usedVars.map(e => LocalVarDecl(e.name, e.typ)()).toSeq
 
     // inhale the pure information
@@ -247,7 +249,10 @@ case class ViperReasoningEngine(verifier: Verifier, program: Program) extends Re
 
   def provePure(kb: KnowledgeBase, target: LogicTerm): ProofResult = {
     // get the variables used in all kinds of terms in the knowledge base
-    val usedVars = getVariablesOfKnowledgeBase(kb.fieldTypes, kb)
+
+    val kbVars = getVariablesOfKnowledgeBase(kb.fieldTypes, kb)
+    val targetVars = getVariablesFromTerm(target)
+    val usedVars = kbVars.union(targetVars)
     val decls = usedVars.map(e => LocalVarDecl(e.name, e.typ)()).toSeq
 
     // inhale the pure information
@@ -293,6 +298,7 @@ case class ViperReasoningEngine(verifier: Verifier, program: Program) extends Re
           println(">>>>>>>>>>>>> PURE >>>>>>>>>>>>>>>>>>>>")
           println(proofMethod)
           println(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
+          errs.foreach(a => println(a))
           throw new IllegalStateException("WHAT")
         }
         UnSat

@@ -96,10 +96,10 @@ case class MethodInference(engine: ReasoningEngine,
     println(s"missing partial bm: ${missingPartial.map(v => applyBm(bm, v)).map(_.pretty()).mkString(" & ")}")
     println("%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%")
 
-    val notAllContentMissing = folded.size != missingFolded.size || direct.size != missingDirect.size || partial.size != missingPartial.size
+    val merged = missingDirect ++ missingFolded ++ missingPartial
+    val notAllContentMissing = merged.nonEmpty
 
     if (notAllContentMissing) {
-      val merged = missingDirect ++ missingFolded ++ missingPartial
       val folStrat = foldedStrategies.filter(d => d._2.nonEmpty).flatMap(d => d._2)
       val dirStrat = directStrategies.filter(d => d._2.nonEmpty).flatMap(d => d._2)
       val combined = (folStrat ++ dirStrat).flatMap(d => d.steps)
@@ -545,6 +545,8 @@ case class MethodInference(engine: ReasoningEngine,
     val calledMethod = this.reps(method)
 
     val (afterArgNormalization, normArgs) = TermNormalization.normalizeMutablePartsInTermList(before, before, args)
+
+    // TODO: is this missing field access permissions? e.g. lst.next is not applied correctly?
 
     val substitution = MapTermSub(calledMethod.args.map(v => VarTerm(v._1, v._2)).zip(normArgs).toMap)
 
@@ -1135,7 +1137,7 @@ case class MethodInference(engine: ReasoningEngine,
     }
   }
 
-  def infer(program: Program, meth: InternalMethod, inductionStart: Boolean) = {
+  def infer(program: Program, meth: InternalMethod, inductionStart: Boolean): (Seq[(String, LogicTerm)], Seq[(String, BaguetteMagic)]) = {
     // generate mapping of field definitions to their corresponding type
     val fieldTypes = program.fields.map(f => f.name -> f.typ).toMap
 
@@ -1182,7 +1184,7 @@ case class MethodInference(engine: ReasoningEngine,
                   entries
                     .map(k => {
                       val (norm, t) = TermNormalization.normalizeMutablePartsInLogicTerm(k, k, assumption)
-                      norm.withPath(ident, assumption).extendInfo(t)
+                      norm.withPath(ident, assumption).extendInfo(t).cleanPotentialWithCurrentKnowledge(this.engine)
                     })
                 }
                 case _ => entries
@@ -1311,9 +1313,9 @@ case class MethodInference(engine: ReasoningEngine,
 
         val originalTypes = program.inferInfo.typeAnnotations(this.currentMethod.method)._1
         val argumentNames = this.currentMethod.args.map(a => a._1)
-        val (resultingKbs, proposableWands) = argumentNames.zip(originalTypes)
+        val (resultingKbs, (proposablePreds, proposableWands)) = argumentNames.zip(originalTypes)
           .filter(a => a._2.isInstanceOf[DatatypeType])
-          .foldLeft((afterPostsKbs, Seq[(String, BaguetteMagic)]()))((acc, arg) => {
+          .foldLeft((afterPostsKbs, (Seq[(String, LogicTerm)](), Seq[(String, BaguetteMagic)]())))((acc, arg) => {
 
             val paramType = arg._2.asInstanceOf[DatatypeType]
             // TODO: fix the name mangling to actually cover the generic name mangling stuff
@@ -1373,63 +1375,91 @@ case class MethodInference(engine: ReasoningEngine,
               (successfullyReconstructed._2, acc._2)
             }
             else {
-              val mappedReconstructions = acc._1.filter(isBaseCasePath)
-                .map(a => {
-                  println(a.path.map(_._2).map(_.pretty()))
-                  a
-                })
-                .map(kb => {
+
+              val foldingProposable = acc._1.filter(isBaseCasePath)
+                .forall(kb => {
                   val originalRef = kb.assignment.variables(arg._1)._1.toVarTerm(Ref)
                   val orgPred = PredInstAccTerm(PredInst(predName, Seq(originalRef)), PermAmount.WRITE)
-                  val result = nullGuardedMagicWandReconstruction(kb, originalRef, orgPred)
-                  (kb.path, result)
+                  val proofRes = this.engine.provePure(kb, NotEqCmpTerm(originalRef, NullTerm()))
+                  if(proofRes == Sat) {
+                    kb.findRefoldingStrategy(this.engine, this.defs, orgPred).isDefined
+                  }
+                  else
+                  {
+                    proofRes == UnSat
+                  }
                 })
 
-              println(s"MAPPED RECONSTRUCTION BASE CASES: ${mappedReconstructions.size}")
-
-              val allSuccessful = mappedReconstructions.forall(a => a._2.isDefined)
-              val wands = mappedReconstructions.flatMap(v => v._2).flatMap(v => v._3)
-
-              if (allSuccessful && wands.nonEmpty) {
-                val allSameWands = wands.forall(w => w.equals(wands.head))
-                if (allSameWands) {
-
-                  println("reconstructed wands:")
-                  wands.foreach(a => println(a.pretty()))
-
-                  println("MAPPED RECONSTRUCTIONS:")
-                  mappedReconstructions.foreach(a => {
-                    println(a._1.map(a => a._2.pretty()).mkString(" -> "))
-                    println(a._2.flatMap(_._3.map(a => a.pretty())))
-                  })
-                  (acc._1, acc._2 ++ Seq((arg._1, wands.head)))
-                }
-                else {
-                  acc
-                }
+              if(foldingProposable) {
+                val variable = VarTerm(arg._1, Ref)
+                val inst = PredInst(predName, Seq(variable))
+                val pacc = PredInstAccTerm(inst, PermAmount.WRITE)
+                val term = ImplTerm(NotEqCmpTerm(variable, NullTerm()), pacc)
+                println(s"INDUCTIVE FOLDING PROPOSABLE: ${term.pretty()}")
+                (acc._1, (acc._2._1 ++ Seq((arg._1, term)), acc._2._2))
               }
               else {
-                // no proposable magic wand found
-                acc
+                val mappedReconstructions = acc._1.filter(isBaseCasePath)
+                  .map(a => {
+                    println(a.path.map(_._2).map(_.pretty()))
+                    a
+                  })
+                  .map(kb => {
+                    val originalRef = kb.assignment.variables(arg._1)._1.toVarTerm(Ref)
+                    val orgPred = PredInstAccTerm(PredInst(predName, Seq(originalRef)), PermAmount.WRITE)
+                    val result = nullGuardedMagicWandReconstruction(kb, originalRef, orgPred)
+                    (kb.path, result)
+                  })
+
+                println(s"MAPPED RECONSTRUCTION BASE CASES: ${mappedReconstructions.size}")
+
+                val allSuccessful = mappedReconstructions.forall(a => a._2.isDefined)
+                val wands = mappedReconstructions.flatMap(v => v._2).flatMap(v => v._3)
+
+                if (allSuccessful && wands.nonEmpty) {
+                  val allSameWands = wands.forall(w => w.equals(wands.head))
+                  if (allSameWands) {
+
+                    println("reconstructed wands:")
+                    wands.foreach(a => println(a.pretty()))
+
+                    println("MAPPED RECONSTRUCTIONS:")
+                    mappedReconstructions.foreach(a => {
+                      println(a._1.map(a => a._2.pretty()).mkString(" -> "))
+                      println(a._2.flatMap(_._3.map(a => a.pretty())))
+                    })
+                    (acc._1, (acc._2._1, acc._2._2 ++ Seq((arg._1, wands.head))))
+                  }
+                  else {
+                    acc
+                  }
+                }
+                else {
+                  // no proposable magic wand found
+                  acc
+                }
               }
             }
           })
 
         println("PROPOSABLE WANDS:")
+        proposablePreds.foreach(p => {
+          println(s"${p._1}: ${p._2.pretty()}")
+        })
         proposableWands.foreach(w => {
           println(s"${w._1}: ${w._2.pretty()}")
         })
 
-        proposableWands
+        (proposablePreds, proposableWands)
 
         // TODO: add a final test which checks if the inferred method spec can be verified
       }
       else {
-        Seq()
+        (Seq(), Seq())
       }
     }
     else {
-      Seq()
+      (Seq(), Seq())
     }
 
     //      if (true) {
@@ -1813,15 +1843,15 @@ case class Inference(verifier: Verifier, defs: Map[String, PredDef], reps: Map[S
           injections
         )
         val beforeSpec = this.methSpec(f)
-        val proposed = mi.infer(this.program, this.reps(f), inductionStart = true)
-        if(proposed.nonEmpty) {
+        val (propPreds, proposed) = mi.infer(this.program, this.reps(f), inductionStart = true)
+        if(propPreds.nonEmpty || proposed.nonEmpty) {
           println("&".repeat(100))
           println("&".repeat(100))
           println("&".repeat(100))
           val propInj = new mutable.HashMap[Injection, Seq[RefoldingStrategy]]()
           val currentSpec = this.methSpec(f)
           val (pres, posts) = currentSpec
-          this.methSpec.put(f, (pres, proposed.map(a => a._2) ++ posts))
+          this.methSpec.put(f, (pres, propPreds.map(a => a._2) ++ proposed.map(a => a._2) ++ posts))
 
           println("ALL ADJUSTED POSTS:")
           (proposed.map(a => a._2) ++ posts).foreach(a => println(a.pretty()))
@@ -1890,6 +1920,8 @@ case class Inference(verifier: Verifier, defs: Map[String, PredDef], reps: Map[S
 }
 // TODO: the generated contract for the make method is not complete and leaves the parts about the predicate (e.g. List(this) out)
 
-object MagicWanderWonder {
 
-}
+// TODO: allow inductive reasoning about foldable predicates as in contains
+// TODO: add a second stage back prop which only asks for specific permissions of a type when its actually unfolded
+// TODO: check if invariants of the datatype are translated correctly
+// TODO: adjust back prop to include the implied conditions that ly on its path
