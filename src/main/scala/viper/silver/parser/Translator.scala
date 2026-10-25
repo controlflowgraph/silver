@@ -9,6 +9,7 @@ package viper.silver.parser
 import viper.silver.FastMessaging
 import viper.silver.ast.utility._
 import viper.silver.ast.{SourcePosition, _}
+import viper.silver.inference.v3.ast.PermAmount
 import viper.silver.plugin.standard.adt.{Adt, AdtType}
 
 import scala.collection.mutable
@@ -567,7 +568,15 @@ case class Translator(program: PProgram) {
 
     // TODO: add permissions to all the transitive predicates as preconditions
     // TODO: REACTIVATE WHEN REQUIRES ARE NOT INTRODUCED BLINDLY
-    val transPredAccess = Seq()
+    val transPredAccess = instantiated.content
+          .filter(v => isDatatype(v.typ))
+          .map(v => {
+            val valParam = LocalVar(v.name, Ref)()
+            val predSignature = encodeTypeAsString(v.typ)
+            val predAccess = PredicateAccess(Seq(valParam), predSignature)()
+            val predAccPred = PredicateAccessPredicate(predAccess, Some(PermAmount.WRITE.toExp()))()
+            Implies(NeCmp(valParam, NullLit()())(), predAccPred)()
+          })
 
     val permRangeGuard = instantiated.content
       .filter(v => isDatatype(v.typ))
@@ -612,7 +621,7 @@ case class Translator(program: PProgram) {
       })
 
     /* TODO: REINTRODUCE WHEN NOT INSERTED BLINDLY: Seq(finalPredAccess) */
-    val postconditions = Seq() /* Seq(finalPredAccess) ++ valParamEqValInObj ++ permParamEqValInObj*/
+    val postconditions = Seq(finalPredAccess) /* Seq(finalPredAccess) ++ valParamEqValInObj ++ permParamEqValInObj*/
 
     val objValFields = instantiated.content
       .map(v => {
@@ -653,9 +662,14 @@ case class Translator(program: PProgram) {
         FieldAssign(fieldAccess, value)()
       })
 
+    val folding = Fold(PredicateAccessPredicate(
+      PredicateAccess(Seq(LocalVar("this", Ref)()), encodedSignature)(),
+      Some(PermAmount.WRITE.toExp())
+    )())()
+
     // TODO: reactivate when introducing permission fields
     //    val body = Seqn(Seq(objCreation) ++ valSetting ++ permSetting, Seq())()
-    val body = Seqn(Seq(objCreation) ++ valSetting, Seq())()
+    val body = Seqn(Seq(objCreation) ++ valSetting ++ Seq(folding), Seq())()
 
     Method(
       makeName,

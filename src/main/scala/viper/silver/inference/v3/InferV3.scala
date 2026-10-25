@@ -29,7 +29,7 @@ case class InferV3(program: Program, verifier: Verifier) {
 
     val reps = transformMethodsToInternalRepresentation(defs)
 
-    Inference(this.verifier, defs, reps, this.program, new mutable.HashMap()).infer()
+    Inference(this.verifier, defs, reps, this.program, new mutable.HashMap(), new mutable.HashMap()).infer()
 
     None
   }

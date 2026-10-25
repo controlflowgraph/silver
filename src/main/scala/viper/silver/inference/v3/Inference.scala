@@ -3,7 +3,7 @@ package viper.silver.inference.v3
 import viper.silver.ast._
 import viper.silver.inference.v3.ast._
 import viper.silver.inference.v3.knowledge._
-import viper.silver.verifier.Verifier
+import viper.silver.verifier.{Failure, Success, Verifier}
 
 import scala.collection.mutable
 
@@ -641,7 +641,7 @@ case class MethodInference(engine: ReasoningEngine,
     val afterBaguette = baguettes.foldLeft(afterPartialRemoval)((kb, p) => {
       val strat = kb.findRepackagingStrategy(this.engine, this.defs, p)
       println(s"REPACK STRAT: ${p.pretty()} --> ${strat}")
-        strat .map(s => {
+      strat.map(s => {
           println(s"REPACKAGING STRATEGY FOR: ${p.pretty()}")
           println(s.pretty())
           applyRefoldingStrategy(this.engine, inj, kb, s)
@@ -1173,14 +1173,14 @@ case class MethodInference(engine: ReasoningEngine,
         val kbs = mesh.filter(e => e._2.contains(current))
           .keys
           .flatMap(i => {
-            val entries = if(this.knowledge.contains(i))
+            val entries = if (this.knowledge.contains(i))
               this.knowledge(i).values
             else Seq()
             if (lines.contains(i)) {
               lines(i) match {
                 case BranchLine(ln, pre, cond, thn, els) => {
                   val assumption = if (thn == current) cond else NotTerm(cond)
-                  val ident = if(thn == current) thn else els
+                  val ident = if (thn == current) thn else els
                   entries
                     .map(k => {
                       val (norm, t) = TermNormalization.normalizeMutablePartsInLogicTerm(k, k, assumption)
@@ -1253,7 +1253,7 @@ case class MethodInference(engine: ReasoningEngine,
         afterPosts
       })
 
-      if(inductionStart) {
+      if (inductionStart) {
         val nullGuardedReconstruction = (kb: KnowledgeBase, v: VarTerm, pred: PredInstAccTerm) => {
           // check if v != null ==> pred(v) can be reconstructed
 
@@ -1381,16 +1381,15 @@ case class MethodInference(engine: ReasoningEngine,
                   val originalRef = kb.assignment.variables(arg._1)._1.toVarTerm(Ref)
                   val orgPred = PredInstAccTerm(PredInst(predName, Seq(originalRef)), PermAmount.WRITE)
                   val proofRes = this.engine.provePure(kb, NotEqCmpTerm(originalRef, NullTerm()))
-                  if(proofRes == Sat) {
+                  if (proofRes == Sat) {
                     kb.findRefoldingStrategy(this.engine, this.defs, orgPred).isDefined
                   }
-                  else
-                  {
+                  else {
                     proofRes == UnSat
                   }
                 })
 
-              if(foldingProposable) {
+              if (foldingProposable) {
                 val variable = VarTerm(arg._1, Ref)
                 val inst = PredInst(predName, Seq(variable))
                 val pacc = PredInstAccTerm(inst, PermAmount.WRITE)
@@ -1708,7 +1707,7 @@ case class MethodInference(engine: ReasoningEngine,
 }
 
 
-case class Inference(verifier: Verifier, defs: Map[String, PredDef], reps: Map[String, InternalMethod], program: Program, methSpec: mutable.HashMap[String, (Seq[LogicTerm], Seq[LogicTerm])]) {
+case class Inference(verifier: Verifier, defs: Map[String, PredDef], reps: Map[String, InternalMethod], program: Program, methSpec: mutable.HashMap[String, (Seq[LogicTerm], Seq[LogicTerm])], finalInjections: mutable.HashMap[String, Map[Injection, Seq[RefoldingStrategy]]]) {
 
   def printSpec(spec: (Seq[LogicTerm], Seq[LogicTerm])): Unit = {
     println("pres:")
@@ -1795,6 +1794,55 @@ case class Inference(verifier: Verifier, defs: Map[String, PredDef], reps: Map[S
     )
   }
 
+  def checkInferenceResult(attempt: String, engine: ReasoningEngine, injection: Map[Injection, Seq[RefoldingStrategy]], internal: InternalMethod): Boolean = {
+    val stubs = this.program.methods.filter(m => !m.name.equals(internal.method))
+      .map(m => {
+        val rep = this.reps(m.name)
+        val pres = (rep.pres ++ this.methSpec(m.name)._1).map(_.toExp())
+        val posts = (rep.posts ++ this.methSpec(m.name)._2).map(_.toExp())
+        Method(m.name, m.formalArgs, m.formalReturns, pres, posts, None)()
+      })
+
+
+    val selfPres = internal.pres ++ this.methSpec(internal.method)._1
+    val selfPosts = internal.posts ++ this.methSpec(internal.method)._2
+    val body = injectRefoldingStrategySeqn(injection, internal.body)
+    val originalMethod = this.program.methods.find(m => m.name.equals(internal.method)).get
+    val self = Method(
+      originalMethod.name,
+      originalMethod.formalArgs,
+      originalMethod.formalReturns,
+      selfPres.map(_.toExp()),
+      selfPosts.map(_.toExp()),
+      Some(body)
+    )()
+
+    val program = Program(
+      this.program.domains,
+      this.program.fields,
+      this.program.functions,
+      this.program.predicates,
+      stubs ++ Seq(self),
+      this.program.extensions,
+      this.program.inferInfo
+    )()
+
+    val result = this.verifier.verify(program)
+    result match {
+      case Success => {
+        println(s"Prog Verif Res: ${attempt}  =>  success")
+        true
+      }
+      case Failure(errors) => {
+        println(s"Prog Verif Res: ${attempt}  =>  failed")
+        errors.foreach(a => {
+          println(s"    ${a}")
+        })
+        false
+      }
+    }
+  }
+
 
   def infer(): Unit = {
     // initialize empty additional specs for all methods
@@ -1826,89 +1874,111 @@ case class Inference(verifier: Verifier, defs: Map[String, PredDef], reps: Map[S
     //   ======> maybe this can be avoided by processing the methods in a topological order?
 
     val order = DependencyAnalysis.computeFlatTopologicalOrder(reps)
+    order.filter(o => o.startsWith("make$"))
+      .foreach(o => {
+        this.finalInjections.put(o, Map())
+        this.methSpec.put(o, (Seq(), Seq()))
+      })
+
     order
-      .filter(o => !o.startsWith("make")) // TODO: remove this to infer make methods as well :)
-      .foreach(f => {
-        println(s"::::::::::: inferring ${f}")
-        val injections = new mutable.HashMap[Injection, Seq[RefoldingStrategy]]()
-        //      val engine = SimpleReasoningEngine()
-        val engine = ViperReasoningEngine(this.verifier, this.program)
-        val mi = MethodInference(
-          engine,
-          this.defs,
-          this.reps,
-          this.reps(f),
-          new mutable.HashMap(),
-          this.methSpec,
-          injections
-        )
-        val beforeSpec = this.methSpec(f)
-        val (propPreds, proposed) = mi.infer(this.program, this.reps(f), inductionStart = true)
-        if(propPreds.nonEmpty || proposed.nonEmpty) {
-          println("&".repeat(100))
-          println("&".repeat(100))
-          println("&".repeat(100))
-          val propInj = new mutable.HashMap[Injection, Seq[RefoldingStrategy]]()
-          val currentSpec = this.methSpec(f)
-          val (pres, posts) = currentSpec
-          this.methSpec.put(f, (pres, propPreds.map(a => a._2) ++ proposed.map(a => a._2) ++ posts))
-
-          println("ALL ADJUSTED POSTS:")
-          (proposed.map(a => a._2) ++ posts).foreach(a => println(a.pretty()))
-
-          val hyp = MethodInference(
+      .filter(o => !o.startsWith("make$")) // TODO: remove this to infer make methods as well :)
+      .foldLeft(true)((running, f) => {
+        if(running) {
+          println(s"::::::::::: inferring ${f}")
+          val injections = new mutable.HashMap[Injection, Seq[RefoldingStrategy]]()
+          //      val engine = SimpleReasoningEngine()
+          val engine = ViperReasoningEngine(this.verifier, this.program)
+          val mi = MethodInference(
             engine,
             this.defs,
             this.reps,
             this.reps(f),
             new mutable.HashMap(),
             this.methSpec,
-            propInj
+            injections
           )
-          hyp.infer(this.program, this.reps(f), inductionStart = false)
-          println("&".repeat(100))
-          println(">".repeat(100))
-          println("&".repeat(100))
+          val beforeSpec = this.methSpec(f)
+          val (propPreds, proposed) = mi.infer(this.program, this.reps(f), inductionStart = true)
 
+          if (checkInferenceResult(s"base ${f}", engine, injections.toMap, this.reps(f))) {
+            val indInjRes = (propPreds.map(_._2) ++ proposed.map(_._2)).foldLeft(injections)((acc, prop) => {
+              val propInj = new mutable.HashMap[Injection, Seq[RefoldingStrategy]]()
+              val currentSpec = this.methSpec(f)
+              val (pres, posts) = currentSpec
+              this.methSpec.put(f, (pres, Seq(prop) ++ posts))
 
-          println("::::::::::::::::::::: ADJUSTED INDUCTIVE HYPOTHESIS METHOD :::::::::::::::::")
-          this.program.methods.filter(m => m.name.equals(f))
-            .map(m => {
-              val (addPres, addPosts) = this.methSpec(f)
-              val extPres = m.pres ++ addPres.map(_.toExp())
-              val extPosts = m.posts ++ addPosts.map(_.toExp())
-              val injectedBody = injectRefoldingStrategySeqn(propInj.toMap, this.reps(f).body)
-              Method(m.name, m.formalArgs, m.formalReturns, extPres, extPosts, Some(injectedBody))()
+              val hyp = MethodInference(
+                engine,
+                this.defs,
+                this.reps,
+                this.reps(f),
+                new mutable.HashMap(),
+                this.methSpec,
+                propInj
+              )
+              hyp.infer(this.program, this.reps(f), inductionStart = false)
+
+              if (checkInferenceResult(s"ind. ${f}", engine, propInj.toMap, this.reps(f))) {
+                propInj
+              }
+              else {
+                this.methSpec.put(f, beforeSpec)
+                acc
+              }
             })
-            .foreach(v => println(v))
+
+            this.finalInjections.put(f, indInjRes.toMap)
+
+            //          println("::::::::::::::::::::: ADD. SPEC. BEFORE INFERENCE :::::::::::::::::")
+            //          printSpec(beforeSpec)
+            //          println("::::::::::::::::::::: ADD. SPEC. AFTER INFERENCE :::::::::::::::::")
+            //          val afterSpec = this.methSpec(f)
+            //          printSpec(afterSpec)
+            //          println("::::::::::::::::::::: STORIES AT INJECTION :::::::::::::::::")
+            //          mi.injections.toSeq
+            //            .filter(i => i._1 != null)
+            //            .sortBy(e => e._1.id)
+            //            .foreach(e => {
+            //              println(s"injection ${e._1.id}")
+            //              e._2.foreach(v => {
+            //                println(v.pretty())
+            //                println("---")
+            //              })
+            //            })
+            //          println("::::::::::::::::::::: ADJUSTED METHOD :::::::::::::::::")
+            //          this.program.methods.filter(m => m.name.equals(f))
+            //            .map(m => {
+            //              val (addPres, addPosts) = this.methSpec(f)
+            //              val extPres = m.pres ++ addPres.map(_.toExp())
+            //              val extPosts = m.posts ++ addPosts.map(_.toExp())
+            //              val injectedBody = injectRefoldingStrategySeqn(injections.toMap, this.reps(f).body)
+            //              Method(m.name, m.formalArgs, m.formalReturns, extPres, extPosts, Some(injectedBody))()
+            //            })
+            //            .foreach(v => println(v))
+            true
+          }
+          else {
+            false
+          }
         }
+        else
+        {
+          false
+        }
+      })
 
-        println("::::::::::::::::::::: ADD. SPEC. BEFORE INFERENCE :::::::::::::::::")
-        printSpec(beforeSpec)
-        println("::::::::::::::::::::: ADD. SPEC. AFTER INFERENCE :::::::::::::::::")
-        val afterSpec = this.methSpec(f)
-        printSpec(afterSpec)
-        println("::::::::::::::::::::: STORIES AT INJECTION :::::::::::::::::")
-        mi.injections.toSeq
-          .filter(i => i._1 != null)
-          .sortBy(e => e._1.id)
-          .foreach(e => {
-            println(s"injection ${e._1.id}")
-            e._2.foreach(v => {
-              println(v.pretty())
-              println("---")
-            })
-          })
-        println("::::::::::::::::::::: ADJUSTED METHOD :::::::::::::::::")
-        this.program.methods.filter(m => m.name.equals(f))
-          .map(m => {
-            val (addPres, addPosts) = this.methSpec(f)
-            val extPres = m.pres ++ addPres.map(_.toExp())
-            val extPosts = m.posts ++ addPosts.map(_.toExp())
-            val injectedBody = injectRefoldingStrategySeqn(injections.toMap, this.reps(f).body)
-            Method(m.name, m.formalArgs, m.formalReturns, extPres, extPosts, Some(injectedBody))()
-          })
-          .foreach(v => println(v))
+    println("::::::::::::::::::::: ADJUSTED INDUCTIVE METHODS :::::::::::::::::")
+    this.program.methods
+      .map(m => {
+        val (addPres, addPosts) = this.methSpec(m.name)
+        val extPres = m.pres ++ addPres.map(_.toExp())
+        val extPosts = m.posts ++ addPosts.map(_.toExp())
+        val injectedBody = injectRefoldingStrategySeqn(this.finalInjections(m.name), this.reps(m.name).body)
+        Method(m.name, m.formalArgs, m.formalReturns, extPres, extPosts, Some(injectedBody))()
+      })
+      .foreach(v => {
+        println(v)
+        println(" ")
       })
 
     println("::::::::::::::::::::: FULL ADD. SPEC. :::::::::::::::::")
