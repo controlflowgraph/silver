@@ -134,8 +134,6 @@ object PredicateCollector {
       case AndTerm(a, b) => collectFoldedPredicatesExtended(engine, a, kb) ++ collectFoldedPredicatesExtended(engine, b, kb)
       case i@ImplTerm(prem, cons) =>
         val result = engine.provePure(kb, prem)
-        println(s"COLLECTING PROOF RESULT FOR: ${prem.pretty()}  ${result}")
-        println(i.pretty())
         if(prem.pretty().contains("List$$$value")) throw new IllegalArgumentException("WHY!")
         if (result == Sat) collectFoldedPredicatesExtended(engine, cons, kb)
         else Seq()

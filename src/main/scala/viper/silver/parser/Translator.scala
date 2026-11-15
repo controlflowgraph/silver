@@ -578,6 +578,9 @@ case class Translator(program: PProgram) {
             Implies(NeCmp(valParam, NullLit()())(), predAccPred)()
           })
 
+    println(s"TRANS PRED ACC: ${makeName}")
+    transPredAccess.foreach(println)
+
     val permRangeGuard = instantiated.content
       .filter(v => isDatatype(v.typ))
       .map(v => {
@@ -591,7 +594,7 @@ case class Translator(program: PProgram) {
 
     // MAKE STATEMENTS NEED TO INCORPORATE
     //    val preconditions = permRangeGuard ++ transPredAccess
-    val preconditions = transPredAccess
+    val preconditions = Seq() // transPredAccess
 
     val finalPredAccess = PredicateAccessPredicate(
       PredicateAccess(Seq(LocalVar("this", Ref)()), encodedSignature)(),
@@ -692,7 +695,6 @@ case class Translator(program: PProgram) {
   }
 
   def instantiateDatatypeTemplate(typ: Type): Unit = {
-    println(s"-------------------> INSTANTIATING FOR TYPE: ${typ}")
     typ match {
       case d: DatatypeType => {
         if (!(instantiatedDatatypes.contains(typ))) {
@@ -865,7 +867,7 @@ case class Translator(program: PProgram) {
           val permExp = instantiated.content.filter(v => isDatatype(v.typ))
             .map(_ => FractionalPerm(IntLit(1)(), IntLit(1)())())
 
-          MethodCall(makeMethod, valExp ++ permExp, ts)(pos, info)
+          MethodCall(makeMethod, valExp, ts)(pos, info)
         })
       }
       case PAssign(targets, _, _) if targets.length != 1 =>
@@ -958,7 +960,6 @@ case class Translator(program: PProgram) {
    * ```
    */
   def methodCallAssign(errorNode: PNode, targets: Seq[PExp with PAssignTarget], assign: Seq[LocalVar] => Stmt): Stmt = {
-    println("assign targets: ")
     val tTargets = targets map exp
     tTargets.foreach(e => println(e, e.typ))
     val ts = tTargets.zipWithIndex.map {

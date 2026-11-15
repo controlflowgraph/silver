@@ -382,14 +382,12 @@ case class TypeChecker(program: PProgram, names: NameAnalyser) {
           val m = func.decl.get.asInstanceOf[PMethod]
           val formalTargets = m.formalReturns
           val formalArgs = m.formalArgs
-          println(s"instantiation: ${c.args} -> ${formalArgs}")
           c.args.foreach(a => {
             checkTopTyped(a, None)
           })
           formalArgs.foreach(fa => check(fa.typ))
           val error = (node: PNode) => (msg: String) => messages ++= FastMessaging.message(node, msg)
           val unificationResult = Unification.findUnificationForArgs(error, c, formalArgs.map(f => f.typ) zip c.args.map(e => e.typ))
-          println(s"resolver UNIFICATION RESULT: ${unificationResult}")
           unificationResult match {
             case Some(r) => {
               val ts = PTypeSubstitution(r)

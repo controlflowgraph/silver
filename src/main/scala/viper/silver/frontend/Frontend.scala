@@ -57,7 +57,7 @@ trait Frontend {
 
   /** Execute all phases of the frontend sequentially. */
   def runAllPhases(): Unit = {
-    println(s"MY PHASES 123: ${phases.map(_.name)}")
+    println(s"SCHEDULED PHASES: ${phases.map(_.name)}")
     println(getClass.getName)
     phases.foreach(ph => {
       println(s"RUNNING PHASE: ${ph.name}")

@@ -35,10 +35,6 @@ case class KnowledgeBase(path: Seq[(Ident, Term)], assignment: Assignment, heap:
     while (open.nonEmpty) {
       val current = open.head
       if (this.heap.initialized._1.contains(current)) {
-        //        println(s"CURRENT: ${current}")
-        //        println(s"MAPPING:")
-        //        println(mapping.toSeq.map(e => e._1.pretty() + " ==> " + e._2.pretty()).mkString("\n"))
-        //        println("- sm")
         val source = mapping(current.toVarTerm(Ref))
         val connections = this.heap.initialized._2.filter(v => v._1 == current)
         connections.foreach(c => {
@@ -77,7 +73,7 @@ case class KnowledgeBase(path: Seq[(Ident, Term)], assignment: Assignment, heap:
 
   def constructBackMapping(meth: InternalMethod, useAllVariables: Boolean): TermSub = {
     val args: Set[String] = if (!useAllVariables) {
-      meth.args.map(_._1).toSet
+      meth.args.map(_._1).toSet.union(meth.res.map(_._1).toSet)
     } else Set()
     val mapping: mutable.HashMap[Term, Term] = new mutable.HashMap()
     this.assignment.variables
@@ -180,7 +176,6 @@ case class KnowledgeBase(path: Seq[(Ident, Term)], assignment: Assignment, heap:
         // this is problematic when having method stubs with malformed contracts
         //        val proofResult = engine.prove(this, LessEqCmpTerm(amount, higher))
         val proofResult = engine.provePure(this, LessEqCmpTerm(amount, higher))
-        println(s"${}")
         proofResult == Sat
     }
   }
@@ -308,11 +303,6 @@ case class KnowledgeBase(path: Seq[(Ident, Term)], assignment: Assignment, heap:
             .exists(f => f.pred.equals(fa.pred))
           val unfoldingStrats = w.foldedCons.toSeq.flatMap(f => findUnfoldingStrategyInPredicate(engine, defs, fa, f))
           val selfInFolded = w.foldedCons.exists(p => p.pred.equals(fa.pred))
-          println(s"CHECKING -------- ${fa.pretty()}   IN    ${w.pretty()}    ${this.path}")
-          println(s"in direct: ${alreadyInDirect.nonEmpty}")
-          println(s"in partial: ${inPartialKnowledge.nonEmpty}")
-          println(s"in unfolding: ${unfoldingStrats.nonEmpty}")
-          println("CHECKING STOP -----")
           if (selfInFolded || selfInPartial || alreadyInDirect.nonEmpty || inPartialKnowledge.nonEmpty || unfoldingStrats.nonEmpty) {
             Some((w, Seq(ApplyStep(w, PermAmount.WRITE)) ++ inPartialKnowledge ++ unfoldingStrats))
           }
@@ -410,10 +400,7 @@ case class KnowledgeBase(path: Seq[(Ident, Term)], assignment: Assignment, heap:
         .toSeq
 
       val strats = mapped.flatMap(v => {
-        println(s"FINDING UNFOLDING STRATEGY FOR ${fa.pretty()} IN ${v.pretty()}")
-        val res = findUnfoldingStrategyInPredicate(engine, defs, fa, v)
-        println(res)
-        res
+        findUnfoldingStrategyInPredicate(engine, defs, fa, v)
       })
       if (applicable.nonEmpty || strats.nonEmpty) {
         Some(RefoldingStrategy(applicable ++ strats))
@@ -537,27 +524,16 @@ case class KnowledgeBase(path: Seq[(Ident, Term)], assignment: Assignment, heap:
     val partial = PredicateCollector.collectPotSatImpls(engine, normTerm, afterNorm)
     val baguettes = PredicateCollector.collectBaguettes(engine, normTerm, afterNorm)
 
-    println(s"CHECKING FOR PARTIAL IN THE REFOLDING STRATEGY:")
-    println(f.pretty())
-    partial.foreach(p => println(p.pretty()))
-
-    println("CHECKING FOR FOLDED IN THE REFOLDING STRATEGY:")
-    println(f.pretty())
-    folded.foreach(p => println(p.pretty()))
-
     val mappedDirect = direct.map(d => afterNorm.findUnfoldingStrategy(engine, defs, d))
     val mappedFolded = folded.map(f => afterNorm.findRefoldingStrategy(engine, defs, f))
     val mappedPartial = partial.map(p => afterNorm.findUnfoldingStrategy(engine, defs, p))
 
-    println(s"CHECKING FOR DIRECT REQUIREMENTS:")
-    println(s"${direct.zip(mappedDirect).map(v => s"${v._1.pretty()}   =>  ${v._2}").mkString("\n").indent(2)}")
 
     mergeRefoldingStrategyOptions(mappedDirect ++ mappedFolded ++ mappedPartial)
       .map(r => RefoldingStrategy(r.steps ++ Seq(FoldingStep(f.pred, f.perm))))
   }
 
   def findRepackagingStrategy(engine: ReasoningEngine, defs: Map[String, PredDef], wand: BaguetteMagic): Option[RefoldingStrategy] = {
-    println(s"Processing repackaging start: ${wand.pretty()}")
     // preparing the knowledge base to perform the packaging procedure
     val extendedWithDirect = wand.directPrem.foldLeft(this)((a, b) => {
       // create a fresh temp variable which represents the current permission amount for this field
@@ -615,13 +591,10 @@ case class KnowledgeBase(path: Seq[(Ident, Term)], assignment: Assignment, heap:
     // finding a refolding strategy
     val (additionalDirect, additionalFolded) = wand.partialCons.foldLeft((Seq[PredFieldAccTerm](), Seq[PredInstAccTerm]()))((acc, d) => {
       val proofRes = engine.provePure(afterCleaned, d.prem)
-      println(s"${d.prem.pretty()} has proof result: ${proofRes}")
       if (proofRes == Sat) {
         // anything else is assumed to not be contained
         val dirs = PredicateCollector.collectDirectPredicates(engine, d.cons, afterCleaned)
         val fols = PredicateCollector.collectFoldedPredicates(engine, d.cons, afterCleaned)
-        println(s"DIRS: ${dirs}")
-        println(s"FOLS: ${fols}")
         (acc._1 ++ dirs, acc._2 ++ fols)
       }
       else {
@@ -629,14 +602,6 @@ case class KnowledgeBase(path: Seq[(Ident, Term)], assignment: Assignment, heap:
         (Seq(), Seq())
       }
     })
-
-    println(s"ADDITIONAL DIRECT: ${}")
-    println(additionalDirect.map(_.pretty()).mkString(" &&&& "))
-    println(additionalFolded.map(_.pretty()).mkString(" &&&& "))
-
-    println(LogicTermRewriting.untangle(afterCleaned).pretty())
-    println(afterCleaned.pretty())
-
 
     val (kbDirect, directStrategies) = (wand.directCons ++ additionalDirect).foldLeft((afterCleaned, Seq[Option[RefoldingStrategy]]()))((acc, d) => {
       val strat = acc._1.findUnfoldingStrategy(engine, defs, d)
@@ -650,18 +615,12 @@ case class KnowledgeBase(path: Seq[(Ident, Term)], assignment: Assignment, heap:
       (applied, acc._2 ++ Seq(strat))
     })
 
-    directStrategies.foreach(a => println(a))
-    foldedStrategies.foreach(a => println(a))
-
-
     val mergedStrategies = directStrategies ++ foldedStrategies
 
     val combined = mergedStrategies.foldLeft(Some(Seq()).asInstanceOf[Option[Seq[RefoldingStep]]])((c, s) => {
         c.flatMap(a => s.map(q => a ++ q.steps))
       })
       .map(s => RefoldingStrategy(Seq(PackageStep(wand, s))))
-
-    println(s"Processing repackaging stop: ${wand.pretty()}")
 
     combined
   }
@@ -742,11 +701,6 @@ case class KnowledgeBase(path: Seq[(Ident, Term)], assignment: Assignment, heap:
     val unsat = this.partial.partial.filter(p => engine.provePureWithPotential(this, p.prem).equals(UnSat))
     val potsat = this.partial.partial.filter(p => engine.provePureWithPotential(this, p.prem).equals(PotSat))
 
-    //    println("CLEANING PROGRAM:")
-    //    println(s"SAT: ${sat.map(_.pretty())}")
-    //    println(s"UNSAT: ${unsat.map(_.pretty())}")
-    //    println(s"POTSAT: ${potsat.map(_.pretty())}")
-
     if (sat.isEmpty && unsat.isEmpty) {
       this
     }
@@ -786,7 +740,6 @@ case class KnowledgeBase(path: Seq[(Ident, Term)], assignment: Assignment, heap:
           .foldLeft(unfolded)((a, b) => applyRefoldingStep(engine, defs, a, b))
       }
       case PackageStep(wand, steps) => {
-        println(s"Processing: ${wand.pretty()}")
         // preparing the knowledge base to perform the packaging procedure
         val extendedWithDirect = wand.directPrem.foldLeft(base)((a, b) => {
           // create a fresh temp variable which represents the current permission amount for this field
@@ -830,26 +783,16 @@ case class KnowledgeBase(path: Seq[(Ident, Term)], assignment: Assignment, heap:
             .extendInfo(EqCmpTerm(res, conditioned))
         })
 
-        //        println("EXTENDED WITH DIRECT STUFF:")
-        //        println(extendedWithFolded.pretty())
-
         // applying the steps of the packaging procedure
         val afterSteps = steps.foldLeft(extendedWithFolded)((k, s) => applyRefoldingStep(engine, defs, k, s))
-        //        println("AFTER STEPS:")
-        //        println(afterSteps.pretty())
 
         // exhaling the permissions which are the consequence of the magic wand
         val exhaledDirect = wand.directCons.foldLeft(afterSteps)((k, d) => k.withDirect(k.direct.exhale(d)))
         val exhaledFolded = wand.foldedCons.foldLeft(exhaledDirect)((k, d) => k.withFolded(k.folded.exhale(d)))
 
-        //        println("AFTER EXHALING RESULT:")
-        //        println(exhaledFolded.pretty())
-
         // adding the magic wand to the current context
         val inhalingWand = exhaledFolded.withMWM(exhaledFolded.mwm.addWand(wand))
 
-        //        println("AFTER INHALING WAND:")
-        //        println(inhalingWand.pretty())
 
         // reconstruction of remaining permissions after performing the folding operations
         val dirKeys = wand.directPrem.map(d => d.exp)
@@ -892,8 +835,6 @@ case class KnowledgeBase(path: Seq[(Ident, Term)], assignment: Assignment, heap:
           // compute the adjusted amount using the given hypothetical formula
           val adjusted = SubTerm(provided, conditioned)
 
-          //          println(s"SIMP ADJUSTED   ${d.pretty()}: ${TermRewriter.simplify(adjusted).pretty()}")
-
           k.withDirect(DirectPermissionMask(k.direct.permissions.updated(d, adjusted)))
         })
 
@@ -925,18 +866,12 @@ case class KnowledgeBase(path: Seq[(Ident, Term)], assignment: Assignment, heap:
           // compute the adjusted amount using the given hypothetical formula
           val adjusted = SubTerm(provided, conditioned)
 
-          //          println(s"SIMP ADJUSTED   ${d.pretty()}: ${TermRewriter.simplify(adjusted).pretty()}")
-
           k.withFolded(FoldedPermissionMask(k.folded.permissions.updated(d, adjusted)))
         })
-
-        //        println("AFTER ADJUSTING REMAINING PERMISSIONS:")
-        //        println(adjustedFolded.pretty())
 
         adjustedFolded
       }
       case ApplyStep(wand, perm) => {
-        //        println(s"APPLYING MW: ${wand.pretty()}")
         // exhale the premise of the magic wand
         val exDirPrem = wand.directPrem.foldLeft(base)((k, d) => {
           val scaled = PredFieldAccTerm(d.exp, MulTerm(d.perm, perm))
@@ -959,9 +894,6 @@ case class KnowledgeBase(path: Seq[(Ident, Term)], assignment: Assignment, heap:
 
         // remove the magic wand from the
         val remWand = inFolCons.withMWM(inFolCons.mwm.removeWand(wand))
-
-        //        println("AFTER APPLYING MW:")
-        //        println(remWand.pretty())
 
         remWand
       }
