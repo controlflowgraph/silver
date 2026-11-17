@@ -528,7 +528,8 @@ case class MethodInference(engine: ReasoningEngine,
     val (shouldRestart, afterExhales) = extendedPres.reverse.foldLeft((false, afterArgNormalization))((acc, p) => {
       val (r, kb) = acc
       val strats = getRefoldingStrategiesAtInjectionPoint(inj)
-      val (restart, result) = processExhaleLine(kb, ExhaleLine(ln, inj, p))
+      val notSelfCall = !this.currentMethod.method.equals(method)
+      val (restart, result) = processExhaleLine(kb, ExhaleLine(ln, inj, p), includePureProp = notSelfCall)
       val after = getRefoldingStrategiesAtInjectionPoint(inj)
       clearInjection(inj)
       addRefoldingStrategiesToInjectionPoint(inj, strats ++ after)
@@ -568,6 +569,18 @@ case class MethodInference(engine: ReasoningEngine,
   }
 
   private def processExhaleLine(before: KnowledgeBase, line: ExhaleLine): (Boolean, KnowledgeBase) = {
+    processExhaleLine(before, line, includePureProp=false)
+  }
+
+  private def collectComparisons(lt: LogicTerm): Set[Comparison] = {
+    lt match {
+      case AndTerm(a, b) => collectComparisons(a).union(collectComparisons(b))
+      case c: Comparison => Set(c)
+      case _ => Set()
+    }
+  }
+
+  private def processExhaleLine(before: KnowledgeBase, line: ExhaleLine, includePureProp: Boolean): (Boolean, KnowledgeBase) = {
     val ExhaleLine(ln, inj, exp) = line
     clearInjection(inj)
 
@@ -581,6 +594,25 @@ case class MethodInference(engine: ReasoningEngine,
     val stripped = PredicateCollector.stripToPure(this.engine, normTerm, afterNorm)
     val partial = PredicateCollector.collectPotSatImpls(this.engine, normTerm, afterNorm)
     val baguettes = PredicateCollector.collectBaguettes(this.engine, normTerm, afterNorm)
+
+    if(includePureProp) {
+      // identify the parts where it's not clear whether they are satisfied/unsatisfied
+      val reduced = LogicTermRewriting.simplify(stripped).substitute(FuncTermSub {
+        case t@(c: Comparison) => {
+          val result = this.engine.proveWithPotential(afterNorm, c.toLogicTerm())
+          result match {
+            case PotSat => t
+            case Sat => BoolTerm(true)
+            case UnSat => BoolTerm(false)
+          }
+        }
+        case t@_ => t
+      }).asInstanceOf[LogicTerm]
+      val comparisons = collectComparisons(reduced)
+      comparisons.foreach(c => {
+        propagatePureConstraints(ln, c.toLogicTerm(), afterNorm)
+      })
+    }
 
     // TODO: this does not deal with missing magic wands and if they need to be  
 
@@ -825,13 +857,15 @@ case class MethodInference(engine: ReasoningEngine,
     }
   }
 
-  private def propagatePureConstraintThrough[P](ident: Ident, until: Ident, lp: LinePropagator[P], payload: P): AdjustmentResponse[P] = {
+  private def propagatePureConstraintThrough[P](ident: Ident, until: Ident, lp: LinePropagator[P], payload: P, path: Seq[LogicTerm]): AdjustmentResponse[P] = {
     if (ident.equals(this.currentMethod.start)) {
       val currentSpec = this.methSpec.getOrElse(this.currentMethod.method, (Seq(), Seq()))
       val currentPres = currentSpec._1
       val currentPosts = currentSpec._2
-      this.methSpec.put(this.currentMethod.method, (currentPres ++ Seq(lp.toLT(payload)), currentPosts))
-      debug(s"PROPAGATED TO THE METHOD SPEC OF METHOD ${this.currentMethod.method}")
+      val lt = lp.toLT(payload)
+      val pre = if(path.isEmpty){ lt } else { ImplTerm(path.reduceLeft(AndTerm), lt) }
+      this.methSpec.put(this.currentMethod.method, (currentPres ++ Seq(pre), currentPosts))
+      println(s"PROPAGATED TO THE METHOD SPEC OF METHOD ${this.currentMethod.method}")
       SuccessfulAdjustment[P]()
     }
     else if (ident.equals(until)) {
@@ -842,9 +876,9 @@ case class MethodInference(engine: ReasoningEngine,
       //       would this even be possible/problematic?
       // TODO: fix this
       val base = this.knowledge(ident).values.head
-      debug(s"THE PAYLOAD IS: ${payload}")
+      println(s"THE PAYLOAD IS: ${payload}")
       // TODO: the payload might not be verifiable like: !acc(SOME, VALUE)
-      val proofRes = this.engine.prove(base, lp.toLT(payload))
+      val proofRes = this.engine.proveWithPotential(base, lp.toLT(payload))
       if (proofRes == Sat) {
         // knowledge is already fulfilled at the current branch and should thus not be propagated further
         SuccessfulAdjustment[P]()
@@ -855,7 +889,14 @@ case class MethodInference(engine: ReasoningEngine,
       }
       else {
         val line = this.currentMethod.rep.getLine(ident)
-        lp.apply(line, payload)
+        val res = lp.apply(line, payload)
+        res match {
+          case ContinueAdjustment(cont) => {
+            val prev = this.currentMethod.rep.mesh.filter(p => p._2.contains(ident)).keys
+            propagatePureConstraintThrough(prev.head, until, lp, cont, path)
+          }
+          case p => p
+        }
       }
     }
   }
@@ -933,10 +974,11 @@ case class MethodInference(engine: ReasoningEngine,
 
   private def getNonNullPropagator(): LinePropagator[Term] = {
     LinePropagator((l, t) => {
+      println(s"PROPAGATING: ${t.pretty()} through ${l.pretty()}")
       l match {
         //        case AssertLine(ln, inj, exp) =>
         //        case AssumeLine(ln, exp) =>
-        //        case BranchLine(ln, pre, cond, thn, els) =>
+        case BranchLine(ln, pre, cond, thn, els) => ContinueAdjustment(t)
         //        case CallLine(ln, inj, method, targets, args) =>
         //        case ExhaleLine(ln, inj, exp) =>
         //        case FieldAssignLine(ln, inj, fa, value) =>
@@ -1001,20 +1043,23 @@ case class MethodInference(engine: ReasoningEngine,
     val bmH = kb.constructBackMapping(this.currentMethod, useAllVariables = true)
     val bm = bmH.followedBy(bmI)
     val backmapped = simplified.substitute(bm)
-    debug(s"ADDITIONAL REQUIREMENTS THAT NEED TO BE PROPAGATED!:")
-    debug(simplified.pretty())
-    debug(backmapped.pretty())
+    println(s"ADDITIONAL REQUIREMENTS THAT NEED TO BE PROPAGATED!:")
+    println(simplified.pretty())
+    println(backmapped.pretty())
 
     val responses = backmapped match {
       case c: Comparison => {
         val (lp, pay) = getLinePropagator(c)
 
         preds.map(i => {
-          propagatePureConstraintThrough(i, this.currentMethod.start, lp, pay)
+          propagatePureConstraintThrough(i, this.currentMethod.start, lp, pay, kb.path.map(_._2))
         })
       }
       case _ => Seq()
     }
+
+    println(s"RESPONSES:")
+    responses.foreach(a => println(a))
 
 
     responses.exists {
@@ -1120,6 +1165,8 @@ case class MethodInference(engine: ReasoningEngine,
       // inhale the preconditions
       // TODO: fix the restart position
       val mergedPres = meth.pres ++ this.methSpec(this.currentMethod.method)._1
+      println("MERGED PRES:")
+      mergedPres.foreach(a => println(a.pretty()))
       val afterPres = mergedPres.foldLeft(empty)((kb, p) => processLine(kb, InhaleLine(meth.start, p))._2)
       setKnowledgeBase(meth.start, afterPres)
 

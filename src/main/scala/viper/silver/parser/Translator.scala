@@ -624,7 +624,7 @@ case class Translator(program: PProgram) {
       })
 
     /* TODO: REINTRODUCE WHEN NOT INSERTED BLINDLY: Seq(finalPredAccess) */
-    val postconditions = Seq(finalPredAccess) /* Seq(finalPredAccess) ++ valParamEqValInObj ++ permParamEqValInObj*/
+    val postconditions = Seq(NeCmp(LocalVar("this", Ref)(), NullLit()())()) /* Seq(finalPredAccess) ++ valParamEqValInObj ++ permParamEqValInObj*/
 
     val objValFields = instantiated.content
       .map(v => {

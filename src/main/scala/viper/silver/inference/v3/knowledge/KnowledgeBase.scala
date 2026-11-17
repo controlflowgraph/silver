@@ -6,7 +6,7 @@ import viper.silver.inference.v3.ast.{AddTerm, AndTerm, BaguetteMagic, BoolTerm,
 
 import scala.collection.mutable
 
-case class KnowledgeBase(path: Seq[(Ident, Term)], assignment: Assignment, heap: Heap, direct: DirectPermissionMask, folded: FoldedPermissionMask, info: LogicTerm, partial: Potential, mwm: MagicWandManager, fieldTypes: Map[String, Type]) {
+case class KnowledgeBase(path: Seq[(Ident, LogicTerm)], assignment: Assignment, heap: Heap, direct: DirectPermissionMask, folded: FoldedPermissionMask, info: LogicTerm, partial: Potential, mwm: MagicWandManager, fieldTypes: Map[String, Type]) {
 
   def this(fieldTypes: Map[String, Type], rc: RefCounter) = {
     this(Seq(), new Assignment(rc), new Heap(rc), new DirectPermissionMask(), new FoldedPermissionMask(), BoolTerm(true), new Potential(), new MagicWandManager(), fieldTypes)
@@ -149,7 +149,7 @@ case class KnowledgeBase(path: Seq[(Ident, Term)], assignment: Assignment, heap:
     KnowledgeBase(this.path, res._1, res._2, res._3, res._4, res._5, res._6, res._7, this.fieldTypes)
   }
 
-  def withPath(ident: Ident, condition: Term): KnowledgeBase = {
+  def withPath(ident: Ident, condition: LogicTerm): KnowledgeBase = {
     KnowledgeBase(this.path ++ Seq((ident, condition)), this.assignment, this.heap, this.direct, this.folded, this.info, this.partial, this.mwm, this.fieldTypes)
   }
 
@@ -701,12 +701,21 @@ case class KnowledgeBase(path: Seq[(Ident, Term)], assignment: Assignment, heap:
     val unsat = this.partial.partial.filter(p => engine.provePureWithPotential(this, p.prem).equals(UnSat))
     val potsat = this.partial.partial.filter(p => engine.provePureWithPotential(this, p.prem).equals(PotSat))
 
+    println("CLEANING:")
+    println("SAT:")
+    sat.foreach(s => println(s.pretty()))
+    println("UNSAT:")
+    unsat.foreach(s => println(s.pretty()))
+    println("POTSAT:")
+    potsat.foreach(s => println(s.pretty()))
+
+
     if (sat.isEmpty && unsat.isEmpty) {
       this
     }
     else {
       val redPot = this.update((a, h, d, f, i, _) => (a, h, d, f, i, Potential(potsat)))
-      sat.foldLeft(redPot)((kb, r) => {
+      val adjusted = sat.foldLeft(redPot)((kb, r) => {
         val dirs = PredicateCollector.collectDirectPredicates(engine, r, kb)
         val folds = PredicateCollector.collectFoldedPredicates(engine, r, kb)
         val pots = PredicateCollector.collectPotSatImpls(engine, r, kb)
@@ -719,6 +728,7 @@ case class KnowledgeBase(path: Seq[(Ident, Term)], assignment: Assignment, heap:
           (a, h, ud, uf, ui, up)
         })
       })
+      adjusted.cleanPotentialWithCurrentKnowledge(engine)
     }
   }
 
