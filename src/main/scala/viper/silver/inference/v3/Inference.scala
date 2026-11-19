@@ -535,10 +535,10 @@ case class MethodInference(engine: ReasoningEngine,
       addRefoldingStrategiesToInjectionPoint(inj, strats ++ after)
       (r || restart, result)
     })
-    println("the preconditions:")
-    extendedPres.foreach(a => println(a.pretty()))
-    println("after exhaling:")
-    println(afterExhales.pretty())
+//    println("the preconditions:")
+//    extendedPres.foreach(a => println(a.pretty()))
+//    println("after exhaling:")
+//    println(afterExhales.pretty())
     if (shouldRestart) {
       (true, afterExhales)
     }
@@ -561,8 +561,8 @@ case class MethodInference(engine: ReasoningEngine,
 
       // TODO: fix restart flag stuff
       val afterInhales = adjustedPosts.foldLeft(afterClearing)((kb, p) => processInhaleLine(kb, before, InhaleLine(ln, p))._2)
-      println("after inhales")
-      println(afterInhales.pretty())
+//      println("after inhales")
+//      println(afterInhales.pretty())
 
       (false, afterInhales)
     }
@@ -857,13 +857,52 @@ case class MethodInference(engine: ReasoningEngine,
     }
   }
 
+  private def collectVariables(t: Term): Set[VarTerm] = {
+    t match {
+      case AddTerm(a, b) => collectVariables(a).union(collectVariables(b))
+      case CondTerm(cond, left, right) => collectVariables(cond).union(collectVariables(left)).union(collectVariables(right))
+      case FieldAccTerm(src, field, typ) => collectVariables(src)
+      case FieldPermAmountTerm(e) => collectVariables(e)
+      case IntTerm(value) => Set()
+      case term: LogicTerm => term match {
+        case AndTerm(a, b) => collectVariables(a).union(collectVariables(b))
+        case BaguetteMagic(directPrem, foldedPrem, partialPrem, directCons, foldedCons, partialCons) => Set() // tood: maybe fix
+        case BoolTerm(value) => Set()
+        case EqCmpTerm(a, b) => collectVariables(a).union(collectVariables(b))
+        case GreaterCmpTerm(a, b) => collectVariables(a).union(collectVariables(b))
+        case GreaterEqCmpTerm(a, b) => collectVariables(a).union(collectVariables(b))
+        case ImplTerm(prem, cons) => collectVariables(prem).union(collectVariables(cons))
+        case LessCmpTerm(a, b) => collectVariables(a).union(collectVariables(b))
+        case LessEqCmpTerm(a, b) => collectVariables(a).union(collectVariables(b))
+        case NotEqCmpTerm(a, b) => collectVariables(a).union(collectVariables(b))
+        case NotTerm(t) => collectVariables(t)
+        case OrTerm(a, b) => collectVariables(a).union(collectVariables(b))
+        case PredFieldAccTerm(exp, perm) => collectVariables(exp).union(collectVariables(perm))
+        case PredInstAccTerm(pred, perm) => pred.args.map(collectVariables).foldLeft(Set[VarTerm]())((a, b) => a.union(b)).union(collectVariables(perm))
+        case v: VarTerm => Set(v)
+        case _ => Set()
+      }
+      case MulTerm(a, b) => collectVariables(a).union(collectVariables(b))
+      case NegTerm(t) => collectVariables(t)
+      case NullTerm() => Set()
+      case OldTerm(e) => collectVariables(e)
+      case PermFracTerm(a, b) => collectVariables(a).union(collectVariables(b))
+      case SubTerm(a, b) => collectVariables(a).union(collectVariables(b))
+      case _ => Set()
+    }
+  }
+
   private def propagatePureConstraintThrough[P](ident: Ident, until: Ident, lp: LinePropagator[P], payload: P, path: Seq[LogicTerm]): AdjustmentResponse[P] = {
     if (ident.equals(this.currentMethod.start)) {
       val currentSpec = this.methSpec.getOrElse(this.currentMethod.method, (Seq(), Seq()))
       val currentPres = currentSpec._1
       val currentPosts = currentSpec._2
       val lt = lp.toLT(payload)
-      val pre = if(path.isEmpty){ lt } else { ImplTerm(path.reduceLeft(AndTerm), lt) }
+      // filter the path conditions to only contain information about the variables of the input
+      // could be relaxed by backmapping with the initial set and not the current
+      val argVars = this.currentMethod.args.map(a => VarTerm(a._1, a._2)).toSet
+      val filteredPath = path.filter(e => collectVariables(e).diff(argVars).isEmpty)
+      val pre = if(filteredPath.isEmpty){ lt } else { ImplTerm(filteredPath.reduceLeft(AndTerm), lt) }
       this.methSpec.put(this.currentMethod.method, (currentPres ++ Seq(pre), currentPosts))
       println(s"PROPAGATED TO THE METHOD SPEC OF METHOD ${this.currentMethod.method}")
       SuccessfulAdjustment[P]()
@@ -972,6 +1011,59 @@ case class MethodInference(engine: ReasoningEngine,
     }
   }
 
+  private def containsTerm(t: Term, pat: Term): Boolean = {
+    if(t.equals(pat)) {
+      true
+    }
+    else
+    {
+      t match {
+        case AddTerm(a, b) => containsTerm(a, pat) || containsTerm(b, pat)
+        case CondTerm(cond, left, right) => containsTerm(cond, pat) || containsTerm(left, pat) || containsTerm(right, pat)
+        case FieldAccTerm(src, field, typ) => containsTerm(src, pat)
+        case FieldPermAmountTerm(e) => containsTerm(e, pat)
+        case IntTerm(value) => false
+        case term: LogicTerm => term match {
+          case AndTerm(a, b) => containsTerm(a, pat) || containsTerm(b, pat)
+          case BaguetteMagic(directPrem, foldedPrem, partialPrem, directCons, foldedCons, partialCons) => {
+            val ap = directPrem.exists(p => containsTerm(p.exp, pat) || containsTerm(p.perm, pat))
+            val bp = foldedPrem.exists(p => p.pred.args.exists(a => containsTerm(a, pat)) || containsTerm(p.perm, pat))
+            val cp = partialPrem.exists(p => containsTerm(p, pat))
+            val ac = directCons.exists(p => containsTerm(p.exp, pat) || containsTerm(p.perm, pat))
+            val bc = foldedCons.exists(p => p.pred.args.exists(a => containsTerm(a, pat)) || containsTerm(p.perm, pat))
+            val cc = partialCons.exists(p => containsTerm(p, pat))
+            ap || bp || cp || ac || bc || cc
+          }
+          case BoolTerm(value) => false
+          case EqCmpTerm(a, b) => containsTerm(a, pat) || containsTerm(b, pat)
+          case GreaterCmpTerm(a, b) => containsTerm(a, pat) || containsTerm(b, pat)
+          case GreaterEqCmpTerm(a, b) => containsTerm(a, pat) || containsTerm(b, pat)
+          case ImplTerm(prem, cons) => containsTerm(prem, pat) || containsTerm(cons, pat)
+          case LessCmpTerm(a, b) => containsTerm(a, pat) || containsTerm(b, pat)
+          case LessEqCmpTerm(a, b) => containsTerm(a, pat) || containsTerm(b, pat)
+          case NotEqCmpTerm(a, b) => containsTerm(a, pat) || containsTerm(b, pat)
+          case NotTerm(t) => containsTerm(t, pat)
+          case OrTerm(a, b) => containsTerm(a, pat) || containsTerm(b, pat)
+          case PredFieldAccTerm(exp, perm) => containsTerm(exp, pat) || containsTerm(perm, pat)
+          case PredInstAccTerm(pred, perm) => pred.args.exists(a => containsTerm(a, pat)) || containsTerm(perm, pat)
+          case VarTerm(name, typ) => false
+          case _ => {
+            throw new IllegalArgumentException(s"Unknown logic term type! ${t.getClass.getCanonicalName}")
+          }
+        }
+        case MulTerm(a, b) => containsTerm(a, pat) || containsTerm(b, pat)
+        case NegTerm(t) => containsTerm(t, pat)
+        case NullTerm() => false
+        case OldTerm(e) => containsTerm(e, pat)
+        case PermFracTerm(a, b) => containsTerm(a, pat) || containsTerm(b, pat)
+        case SubTerm(a, b) => containsTerm(a, pat) || containsTerm(b, pat)
+        case _ => {
+          throw new IllegalArgumentException(s"Unknown term type! ${t.getClass.getCanonicalName}")
+        }
+      }
+    }
+  }
+
   private def getNonNullPropagator(): LinePropagator[Term] = {
     LinePropagator((l, t) => {
       println(s"PROPAGATING: ${t.pretty()} through ${l.pretty()}")
@@ -983,7 +1075,14 @@ case class MethodInference(engine: ReasoningEngine,
         //        case ExhaleLine(ln, inj, exp) =>
         //        case FieldAssignLine(ln, inj, fa, value) =>
         //        case InhaleLine(ln, exp) =>
-        //        case LocalAssignLine(ln, inj, variable, value) =>
+        case LocalAssignLine(ln, inj, variable, value) => {
+          if(containsTerm(t, variable)){
+            FailedAdjustment()
+          }
+          else {
+            ContinueAdjustment(t)
+          }
+        }
         //        case MergeLine(ln, correspondingBranch, postThnInj, postElsInj, lastThn, lastEls) =>
         case NewObjLine(ln, target, fields) => {
           // check if target == term -> perfect since a fresh object is never null
@@ -1186,11 +1285,15 @@ case class MethodInference(engine: ReasoningEngine,
               lines(i) match {
                 case BranchLine(ln, pre, cond, thn, els) => {
                   val assumption = if (thn == current) cond else NotTerm(cond)
+                  val simped = LogicTermRewriting.simplify(assumption)
+                  println(s"ADDING CONDITION BASED ON PATH: ${assumption.pretty()}")
                   val ident = if (thn == current) thn else els
                   entries
                     .map(k => {
-                      val (norm, t) = TermNormalization.normalizeMutablePartsInLogicTerm(k, k, assumption)
-                      norm.withPath(ident, assumption).extendInfo(t).cleanPotentialWithCurrentKnowledge(this.engine)
+                      val (norm, t) = TermNormalization.normalizeMutablePartsInLogicTerm(k, k, simped)
+                      println(s"NORMALIZED VERSION IN KB: ${t.pretty()}")
+                      println(s"BEFORE IS SIMPED ${simped.pretty()}")
+                      norm.withPath(ident, simped).extendInfo(t).cleanPotentialWithCurrentKnowledge(this.engine)
                     })
                 }
                 case _ => entries
@@ -1766,7 +1869,8 @@ case class Inference(verifier: Verifier, defs: Map[String, PredDef], reps: Map[S
   }
 
   private def convertRefoldingStrategy(injections: Seq[RefoldingStrategy]): Stmt = {
-    val stmts = injections.flatMap(strat => strat.steps.flatMap(convertRefoldingStep))
+    // does the distinct guarantee the order of the elements in the sequence?
+    val stmts = injections.flatMap(strat => strat.steps.flatMap(convertRefoldingStep)).distinct
     Seqn(stmts, Seq())()
   }
 
@@ -1897,6 +2001,7 @@ case class Inference(verifier: Verifier, defs: Map[String, PredDef], reps: Map[S
 
     order
       .filter(o => !o.startsWith("make$")) // TODO: remove this to infer make methods as well :)
+      .filter(o => !this.reps(o).emptyBody)
       .foldLeft(true)((running, f) => {
         if(running) {
           println(s"::::::::::: inferring ${f}")
@@ -1912,8 +2017,8 @@ case class Inference(verifier: Verifier, defs: Map[String, PredDef], reps: Map[S
             this.methSpec,
             injections
           )
-          val beforeSpec = this.methSpec(f)
           val (propPreds, proposed) = mi.infer(this.program, this.reps(f), inductionStart = true)
+          val beforeSpec = this.methSpec(f)
 
           if (checkInferenceResult(s"base ${f}", engine, injections.toMap, this.reps(f))) {
             val indInjRes = (propPreds.map(_._2) ++ proposed.map(_._2)).foldLeft(injections)((acc, prop) => {

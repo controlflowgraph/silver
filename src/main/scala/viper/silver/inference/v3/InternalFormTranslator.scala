@@ -313,6 +313,6 @@ object InternalFormTranslator {
 
     val stopIdent = transform._2.last
 
-    InternalMethod(m.name, args, res, pres, posts, start, stopIdent, rep, extendedBody, finalInj)
+    InternalMethod(m.name, args, res, pres, posts, start, stopIdent, rep, extendedBody, finalInj, m.body.isEmpty)
   }
 }

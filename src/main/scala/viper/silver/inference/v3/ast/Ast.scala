@@ -863,6 +863,14 @@ object LogicTermRewriting {
     }
   )
 
+  private def simpNegEquiv: Seq[TermSub] = Seq(
+    FuncTermSub {
+      case NotTerm(EqCmpTerm(a, b)) => NotEqCmpTerm(a, b)
+      case NotTerm(NotEqCmpTerm(a, b)) => EqCmpTerm(a, b)
+      case c => c
+    }
+  )
+
 
   private def containsLT(term: Term, pattern: LogicTerm): Boolean = {
     term match {
@@ -930,7 +938,8 @@ object LogicTermRewriting {
     val subs = Seq(
       simpConj,
       simpDisj,
-      simpEquiv
+      simpEquiv,
+      simpNegEquiv
     ).flatten
     val func = FuncTermSub(f => {
       subs.foldLeft(f)((v, q) => v.substitute(q))

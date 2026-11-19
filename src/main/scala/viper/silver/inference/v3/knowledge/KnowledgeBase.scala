@@ -702,6 +702,8 @@ case class KnowledgeBase(path: Seq[(Ident, LogicTerm)], assignment: Assignment, 
     val potsat = this.partial.partial.filter(p => engine.provePureWithPotential(this, p.prem).equals(PotSat))
 
     println("CLEANING:")
+    println(this.path.map(_._2).map(_.pretty()))
+    println(this.pretty())
     println("SAT:")
     sat.foreach(s => println(s.pretty()))
     println("UNSAT:")
@@ -720,6 +722,7 @@ case class KnowledgeBase(path: Seq[(Ident, LogicTerm)], assignment: Assignment, 
         val folds = PredicateCollector.collectFoldedPredicates(engine, r, kb)
         val pots = PredicateCollector.collectPotSatImpls(engine, r, kb)
         val pure = PredicateCollector.stripToPure(engine, r, kb)
+        println(s"ADDING PURE FROM: ${r.pretty()}  => ${pure.pretty()}")
         kb.update((a, h, d, f, i, p) => {
           val ud = dirs.foldLeft(d)((a, b) => a.inhale(b))
           val uf = folds.foldLeft(f)((a, b) => a.inhale(b))
